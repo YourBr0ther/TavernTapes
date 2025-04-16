@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-900 text-white;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply px-4 py-2 bg-primary hover:bg-primary-light rounded text-white font-medium transition-colors;
+  }
+  
+  .btn-secondary {
+    @apply px-4 py-2 bg-secondary hover:bg-secondary-light rounded text-gray-900 font-medium transition-colors;
+  }
+  
+  .input-primary {
+    @apply px-4 py-2 bg-gray-800 border border-purple-700 rounded focus:outline-none focus:border-purple-500;
+  }
+} 
