@@ -29,15 +29,16 @@ const RecordingView: React.FC<RecordingViewProps> = ({ onRecordingComplete, sett
   const [recoveryState, setRecoveryState] = useState<any>(null);
 
   useEffect(() => {
-    // Initialize audio service with provided settings
-    audioServiceRef.current = new AudioService(settings);
+    // Reset and initialize audio service with provided settings
+    AudioService.resetInstance();
+    audioServiceRef.current = AudioService.getInstance(settings);
     audioServiceRef.current.setAudioLevelCallback(setAudioLevel);
 
     // Handle crash recovery messages
     if (window.electron) {
       window.electron.ipcRenderer.on('save-state-before-crash', () => {
         console.log('Received save-state-before-crash message');
-        if (audioServiceRef.current?.isCurrentlyRecording()) {
+        if (audioServiceRef.current?.isRecording()) {
           console.log('Attempting to save state before crash');
           audioServiceRef.current.saveState();
         }
@@ -61,7 +62,7 @@ const RecordingView: React.FC<RecordingViewProps> = ({ onRecordingComplete, sett
 
     // Cleanup on unmount
     return () => {
-      if (audioServiceRef.current?.isCurrentlyRecording()) {
+      if (audioServiceRef.current?.isRecording()) {
         audioServiceRef.current.stopRecording();
       }
       if (noAudioTimeoutRef.current) {
@@ -70,6 +71,7 @@ const RecordingView: React.FC<RecordingViewProps> = ({ onRecordingComplete, sett
       if (window.electron) {
         window.electron.ipcRenderer.removeAllListeners('save-state-before-crash');
       }
+      AudioService.resetInstance();
     };
   }, [settings]);
 

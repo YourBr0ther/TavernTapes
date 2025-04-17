@@ -1,3 +1,5 @@
+import { App as ElectronApp } from 'electron';
+
 interface IpcRenderer {
   send: (channel: string, data: any) => void;
   invoke: (channel: string, data?: any) => Promise<any>;
@@ -12,6 +14,12 @@ interface Electron {
 declare global {
   interface Window {
     electron: Electron;
+  }
+}
+
+declare module 'electron' {
+  interface App extends ElectronApp {
+    isQuitting: boolean;
   }
 }
 

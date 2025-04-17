@@ -7,13 +7,6 @@ import { promises as fs } from 'fs';
 import * as path from 'path';
 import { isDevelopment } from './utils';
 
-// Extend the Electron.App interface
-declare module 'electron' {
-  interface App {
-    isQuitting: boolean;
-  }
-}
-
 // App state management
 const appState = {
   isQuitting: false
@@ -205,38 +198,32 @@ ipcMain.handle('delete-file', async (event, filePath) => {
   }
 });
 
+// Add directory selection handler
 ipcMain.handle('select-directory', async () => {
+  console.log('Directory selection requested');
   try {
-    const result = await dialog.showOpenDialog({
+    if (!mainWindow) {
+      console.error('No main window available');
+      return { success: false, error: 'Application window not available' };
+    }
+
+    const result = await dialog.showOpenDialog(mainWindow, {
       properties: ['openDirectory', 'createDirectory'],
       title: 'Select Recording Storage Location',
       buttonLabel: 'Select Folder',
-      message: 'Choose where to save your recordings'
+      defaultPath: app.getPath('documents') // Start in Documents folder
     });
-    
-    if (!result.canceled && result.filePaths.length > 0) {
-      const selectedPath = result.filePaths[0];
-      
-      try {
-        // Test write access to the selected directory
-        const testFile = path.join(selectedPath, '.test_write_access');
-        await fs.writeFile(testFile, '');
-        await fs.unlink(testFile);
-        
-        return { success: true, path: selectedPath };
-      } catch (error) {
-        return { 
-          success: false, 
-          error: 'Cannot write to selected directory. Please choose a directory with write permissions.' 
-        };
-      }
+
+    console.log('Directory selection result:', result);
+
+    if (result.canceled) {
+      console.log('Directory selection cancelled');
+      return { success: false, error: 'Directory selection was cancelled' };
     }
-    return { success: false, error: 'No directory selected' };
+
+    return { success: true, path: result.filePaths[0] };
   } catch (error) {
-    console.error('Error selecting directory:', error);
-    return { 
-      success: false, 
-      error: error instanceof Error ? error.message : 'Failed to select directory' 
-    };
+    console.error('Error in directory selection:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
   }
 }); 

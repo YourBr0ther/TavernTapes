@@ -42,23 +42,23 @@ export interface RecordingMetadata {
 export type AudioLevelCallback = (level: number) => void;
 
 export class AudioService {
-  private static instance: AudioService;
+  private static instance: AudioService | null = null;
   private recorder: RecordRTC | null = null;
   private audioChunks: Blob[] = [];
   private recordingStartTime: Date | null = null;
   private recordingOptions: RecordingOptions;
   private currentSessionName: string = '';
-  private isRecording: boolean = false;
-  private isPaused: boolean = false;
+  private _isRecording: boolean = false;
+  private _isPaused: boolean = false;
   private recordingTimer: NodeJS.Timeout | null = null;
   private currentDuration: number = 0;
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
-  private audioLevelCallback: AudioLevelCallback | null = null;
+  private audioLevelCallback: ((level: number) => void) | null = null;
   private animationFrameId: number | null = null;
   private mediaStream: MediaStream | null = null;
-  private maxChunks: number = 100; // Maximum number of chunks to keep in memory
-  private chunkSize: number = 1024 * 1024; // 1MB chunks
+  private maxChunks: number = 100;
+  private chunkSize: number = 1024 * 1024;
   private lastSplitTime: number = 0;
   private crashRecoveryService: CrashRecoveryService;
   private stateSaveInterval: NodeJS.Timeout | null = null;
@@ -70,11 +70,28 @@ export class AudioService {
     this.crashRecoveryService = CrashRecoveryService.getInstance();
   }
 
-  public static getInstance(options: RecordingOptions): AudioService {
-    if (!AudioService.instance) {
+  public static getInstance(options?: RecordingOptions): AudioService {
+    if (!AudioService.instance && options) {
       AudioService.instance = new AudioService(options);
+    } else if (!AudioService.instance) {
+      throw new Error('AudioService must be initialized with options first');
     }
     return AudioService.instance;
+  }
+
+  public static resetInstance(): void {
+    if (AudioService.instance) {
+      AudioService.instance.cleanup();
+    }
+    AudioService.instance = null;
+  }
+
+  public updateOptions(options: RecordingOptions): void {
+    this.recordingOptions = { ...this.recordingOptions, ...options };
+  }
+
+  public setAudioLevelCallback(callback: (level: number) => void): void {
+    this.audioLevelCallback = callback;
   }
 
   // Add method to get available input devices
@@ -86,6 +103,32 @@ export class AudioService {
       console.error('Error getting input devices:', error);
       return [];
     }
+  }
+
+  // Public methods for recording control
+  public async start(sessionName?: string): Promise<void> {
+    return this.startRecording(sessionName);
+  }
+
+  public async stop(): Promise<RecordingMetadata> {
+    return this.stopRecording();
+  }
+
+  public pause(): void {
+    this.pauseRecording();
+  }
+
+  public resume(): void {
+    this.resumeRecording();
+  }
+
+  // Public methods for state checking
+  public isRecording(): boolean {
+    return this._isRecording;
+  }
+
+  public isPaused(): boolean {
+    return this._isPaused;
   }
 
   async startRecording(sessionName: string = ''): Promise<void> {
@@ -100,13 +143,13 @@ export class AudioService {
           this.currentSessionName = recoveryState.sessionName;
           this.recordingStartTime = recoveryState.startTime;
           this.currentDuration = recoveryState.duration;
-          this.isPaused = recoveryState.isPaused;
+          this._isPaused = recoveryState.isPaused;
           this.currentFileReference = recoveryState.currentFileReference;
           await this.crashRecoveryService.clearRecoveryState();
         }
       }
 
-      if (this.isRecording) {
+      if (this._isRecording) {
         throw new Error('Recording is already in progress');
       }
 
@@ -148,7 +191,7 @@ export class AudioService {
         bitrate: this.recordingOptions.quality * 1000,
         timeSlice: 1000,
         ondataavailable: async (blob: Blob) => {
-          if (this.isRecording && !this.isPaused) {
+          if (this._isRecording && !this._isPaused) {
             if (!this.currentSessionId) {
               this.currentSessionId = crypto.randomUUID();
             }
@@ -186,8 +229,8 @@ export class AudioService {
       
       this.currentSessionName = sessionName || `Session_${formattedDate}_${formattedTime}`;
       this.recordingStartTime = new Date();
-      this.isRecording = true;
-      this.isPaused = false;
+      this._isRecording = true;
+      this._isPaused = false;
       this.currentDuration = 0;
       this.currentSessionId = crypto.randomUUID();
 
@@ -207,10 +250,6 @@ export class AudioService {
       }
       throw error;
     }
-  }
-
-  setAudioLevelCallback(callback: AudioLevelCallback): void {
-    this.audioLevelCallback = callback;
   }
 
   private startAudioLevelMonitoring(): void {
@@ -245,25 +284,25 @@ export class AudioService {
   }
 
   pauseRecording(): void {
-    if (this.recorder && this.isRecording && !this.isPaused) {
+    if (this.recorder && this._isRecording && !this._isPaused) {
       this.recorder.pauseRecording();
-      this.isPaused = true;
+      this._isPaused = true;
       this.stopTimer();
       this.stopAudioLevelMonitoring();
     }
   }
 
   resumeRecording(): void {
-    if (this.recorder && this.isRecording && this.isPaused) {
+    if (this.recorder && this._isRecording && this._isPaused) {
       this.recorder.resumeRecording();
-      this.isPaused = false;
+      this._isPaused = false;
       this.startTimer();
       this.startAudioLevelMonitoring();
     }
   }
 
   async stopRecording(): Promise<RecordingMetadata> {
-    if (!this.isRecording) {
+    if (!this._isRecording) {
       throw new Error('No recording in progress');
     }
 
@@ -271,7 +310,7 @@ export class AudioService {
       throw new Error('Recorder not initialized');
     }
 
-    if (this.isPaused) {
+    if (this._isPaused) {
       // Resume recording before stopping to ensure proper state
       this.resumeRecording();
     }
@@ -410,7 +449,7 @@ export class AudioService {
       bitrate: this.recordingOptions.quality * 1000,
       timeSlice: 1000,
       ondataavailable: (blob: Blob) => {
-        if (this.isRecording && !this.isPaused) {
+        if (this._isRecording && !this._isPaused) {
           this.audioChunks.push(blob);
           
           // Check if we need to split based on memory management
@@ -469,20 +508,28 @@ export class AudioService {
     }
   }
 
-  private async saveState(): Promise<void> {
-    if (!this.isRecording || !this.recordingStartTime) return;
+  public async getRecoveryState(): Promise<RecoveryState | null> {
+    return this.crashRecoveryService.getRecoveryState();
+  }
+
+  public async clearRecoveryState(): Promise<void> {
+    return this.crashRecoveryService.clearRecoveryState();
+  }
+
+  public async saveState(): Promise<void> {
+    if (!this._isRecording || !this.recordingStartTime) return;
 
     const state: RecoveryState = {
       sessionName: this.currentSessionName,
       startTime: this.recordingStartTime,
       duration: this.currentDuration,
-      isPaused: this.isPaused,
+      isPaused: this._isPaused,
       currentFileReference: this.currentFileReference,
       metadata: {
         sessionName: this.currentSessionName,
         startTime: this.recordingStartTime,
         duration: this.currentDuration,
-        fileSize: this.currentFileReference?.size || 0,
+        fileSize: this.currentFileReference?.metadata.fileSize || 0,
         format: this.recordingOptions.format,
         quality: this.recordingOptions.quality
       }
@@ -492,10 +539,12 @@ export class AudioService {
   }
 
   private startStateSaving(): void {
-    // Save state every 30 seconds
+    if (this.stateSaveInterval) {
+      clearInterval(this.stateSaveInterval);
+    }
     this.stateSaveInterval = setInterval(() => {
       this.saveState();
-    }, 30000);
+    }, 5000); // Save state every 5 seconds
   }
 
   private stopStateSaving(): void {
@@ -518,8 +567,8 @@ export class AudioService {
       this.stopAudioLevelMonitoring();
       this.stopTimer();
       this.stopStateSaving();
-      this.isRecording = false;
-      this.isPaused = false;
+      this._isRecording = false;
+      this._isPaused = false;
       this.recordingStartTime = null;
       this.currentDuration = 0;
       this.currentSessionId = null;
@@ -527,8 +576,8 @@ export class AudioService {
     } catch (error) {
       console.error('Error during cleanup:', error);
       // Reset critical state even if cleanup fails
-      this.isRecording = false;
-      this.isPaused = false;
+      this._isRecording = false;
+      this._isPaused = false;
       this.recorder = null;
       this.mediaStream = null;
     }
@@ -538,17 +587,9 @@ export class AudioService {
     return this.currentDuration;
   }
 
-  isCurrentlyRecording(): boolean {
-    return this.isRecording;
-  }
-
-  isCurrentlyPaused(): boolean {
-    return this.isPaused;
-  }
-
   // For testing purposes only
   async simulateCrash(): Promise<void> {
-    if (!this.isRecording) {
+    if (!this._isRecording) {
       throw new Error('No active recording to simulate crash for');
     }
 

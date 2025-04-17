@@ -1,8 +1,8 @@
-import { app, BrowserWindow, ipcMain, powerSaveBlocker } from 'electron';
+import { app, BrowserWindow, ipcMain, powerSaveBlocker, dialog } from 'electron';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import process from 'process';
-import { TrayManager } from './src/main/tray';
+import { TrayManager } from './src/main/tray.js';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -22,7 +22,9 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       webSecurity: true,
-      preload: join(__dirname, 'src', 'preload.js'),
+      preload: isDev
+        ? join(__dirname, '..', 'dist', 'preload', 'preload.js')
+        : join(__dirname, 'preload', 'preload.js'),
       permissions: {
         media: true,
         audioCapture: true,
@@ -194,5 +196,35 @@ ipcMain.handle('delete-file', async (event, filePath) => {
   } catch (error) {
     console.error('Error deleting file:', error);
     return { success: false, error: error.message };
+  }
+});
+
+// Add directory selection handler
+ipcMain.handle('select-directory', async () => {
+  console.log('Directory selection requested');
+  try {
+    if (!mainWindow) {
+      console.error('No main window available');
+      return { success: false, error: 'Application window not available' };
+    }
+
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openDirectory', 'createDirectory'],
+      title: 'Select Recording Storage Location',
+      buttonLabel: 'Select Folder',
+      defaultPath: app.getPath('documents') // Start in Documents folder
+    });
+
+    console.log('Directory selection result:', result);
+
+    if (result.canceled) {
+      console.log('Directory selection cancelled');
+      return { success: false, error: 'Directory selection was cancelled' };
+    }
+
+    return { success: true, path: result.filePaths[0] };
+  } catch (error) {
+    console.error('Error in directory selection:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
   }
 }); 

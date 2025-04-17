@@ -24,7 +24,7 @@ export class TrayManager {
 
   private initializeTray() {
     // Create tray icon
-    const iconPath = join(__dirname, '..', 'public', 'logo.png');
+    const iconPath = join(__dirname, '..', '..', 'logo.png');
     const trayIcon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
     this.tray = new Tray(trayIcon);
 
@@ -54,7 +54,7 @@ export class TrayManager {
     new Notification({
       title: title,
       body: body,
-      icon: join(__dirname, '..', 'public', 'logo.png')
+      icon: join(__dirname, '..', '..', 'logo.png')
     }).show();
 
     this.lastNotificationTime = now;

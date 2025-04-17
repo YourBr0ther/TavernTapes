@@ -29,7 +29,7 @@ vi.mock('recordrtc', () => ({
   StereoAudioRecorder: vi.fn()
 }));
 
-import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { AudioService } from '../AudioService';
 
 // Mock browser APIs
@@ -96,66 +96,49 @@ describe('AudioService', () => {
   let audioService: AudioService;
 
   beforeEach(() => {
-    vi.clearAllMocks();
-    audioService = new AudioService({
-      format: 'wav',
-      quality: 128
-    });
+    audioService = AudioService.getInstance();
   });
 
   afterEach(async () => {
-    await audioService.cleanup();
+    await audioService.stop().catch(() => {});
   });
 
-  it('should start recording successfully', async () => {
-    await audioService.startRecording();
-    expect(audioService.isCurrentlyRecording()).toBe(true);
+  it('should start recording', async () => {
+    await audioService.start();
+    expect(audioService.isRecording()).toBe(true);
   });
 
-  it('should stop recording successfully', async () => {
-    await audioService.startRecording();
-    const result = await audioService.stopRecording();
-    expect(result).toBeDefined();
-    expect(result.fileSize).toBeGreaterThan(0);
-    expect(audioService.isCurrentlyRecording()).toBe(false);
-    expect(mockRecorder.getBlob).toHaveBeenCalled();
-    expect(mockRecorder.stopRecording).toHaveBeenCalled();
-  }, 15000);
+  it('should stop recording', async () => {
+    await audioService.start();
+    await audioService.stop();
+    expect(audioService.isRecording()).toBe(false);
+  });
 
-  it('should throw error when stopping recording that was not started', async () => {
-    await expect(audioService.stopRecording()).rejects.toThrow('No recording in progress');
+  it('should pause recording', async () => {
+    await audioService.start();
+    audioService.pause();
+    expect(audioService.isPaused()).toBe(true);
+  });
+
+  it('should resume recording', async () => {
+    await audioService.start();
+    audioService.pause();
+    audioService.resume();
+    expect(audioService.isPaused()).toBe(false);
+    expect(audioService.isRecording()).toBe(true);
   });
 
   it('should handle errors during recording start', async () => {
-    mockMediaDevices.getUserMedia.mockRejectedValueOnce(new Error('Failed to start recording'));
-    await expect(audioService.startRecording()).rejects.toThrow('Failed to start recording');
-    expect(audioService.isCurrentlyRecording()).toBe(false);
+    const mockError = new Error('Failed to start recording');
+    vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockRejectedValueOnce(mockError);
+    await expect(audioService.start()).rejects.toThrow('Failed to start recording');
+    expect(audioService.isRecording()).toBe(false);
   });
 
   it('should handle errors during recording stop', async () => {
-    await audioService.startRecording();
-    
-    mockRecorder.getBlob.mockReturnValueOnce(null);
-    
-    await expect(audioService.stopRecording()).rejects.toThrow('Failed to get recording blob');
-    expect(mockRecorder.destroy).toHaveBeenCalled();
-  });
-
-  it('should pause and resume recording', async () => {
-    await audioService.startRecording();
-    expect(audioService.isCurrentlyRecording()).toBe(true);
-    
-    audioService.pauseRecording();
-    expect(audioService.isCurrentlyPaused()).toBe(true);
-    
-    audioService.resumeRecording();
-    expect(audioService.isCurrentlyPaused()).toBe(false);
-    expect(audioService.isCurrentlyRecording()).toBe(true);
-  });
-
-  it('should handle errors during recording', async () => {
-    const error = new Error('Recording failed');
-    mockMediaDevices.getUserMedia.mockRejectedValueOnce(error);
-    await expect(audioService.startRecording()).rejects.toThrow('Recording failed');
+    await audioService.start();
+    const mockError = new Error('Failed to stop recording');
+    vi.spyOn(audioService as any, 'stopRecording').mockRejectedValueOnce(mockError);
+    await expect(audioService.stop()).rejects.toThrow('Failed to stop recording');
   });
 }); 

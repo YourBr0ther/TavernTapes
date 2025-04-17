@@ -1,12 +1,28 @@
 export interface Settings {
   theme: 'light' | 'dark';
   audioFormat: 'wav' | 'mp3';
+  format: 'wav' | 'mp3';  // Alias for audioFormat for backward compatibility
   audioQuality: number;
+  quality: number;  // Alias for audioQuality for backward compatibility
   autoSplitEnabled: boolean;
   splitInterval: number;
   splitSize: number;
   storageLocation: string;
+  inputDeviceId: string;
 }
+
+export const defaultSettings: Settings = {
+  theme: 'dark',
+  audioFormat: 'wav',
+  format: 'wav',
+  audioQuality: 320,
+  quality: 320,
+  autoSplitEnabled: true,
+  splitInterval: 30, // minutes
+  splitSize: 500, // MB
+  storageLocation: 'TavernTapes_Recordings',
+  inputDeviceId: 'default'
+};
 
 class SettingsService {
   private static instance: SettingsService;
@@ -14,15 +30,6 @@ class SettingsService {
   private readonly DB_VERSION = 1;
   private db: IDBDatabase | null = null;
   private initializationPromise: Promise<void> | null = null;
-  private defaultSettings: Settings = {
-    theme: 'dark',
-    audioFormat: 'wav',
-    audioQuality: 320,
-    autoSplitEnabled: true,
-    splitInterval: 30, // minutes
-    splitSize: 500, // MB
-    storageLocation: 'TavernTapes_Recordings'
-  };
 
   private constructor() {
     this.initializationPromise = this.initializeDB();
@@ -72,9 +79,46 @@ class SettingsService {
       const request = store.getAll();
 
       request.onsuccess = () => {
-        const settings = { ...this.defaultSettings };
-        request.result.forEach((item: { key: keyof Settings; value: Settings[keyof Settings] }) => {
-          settings[item.key] = item.value;
+        const settings: Settings = { ...defaultSettings };
+        request.result.forEach((item: { key: keyof Settings; value: unknown }) => {
+          switch (item.key) {
+            case 'theme':
+              if (item.value === 'light' || item.value === 'dark') {
+                settings.theme = item.value;
+              }
+              break;
+            case 'audioFormat':
+            case 'format':
+              if (item.value === 'wav' || item.value === 'mp3') {
+                settings.audioFormat = item.value;
+                settings.format = item.value;
+              }
+              break;
+            case 'audioQuality':
+            case 'quality':
+              if (typeof item.value === 'number') {
+                settings.audioQuality = item.value;
+                settings.quality = item.value;
+              }
+              break;
+            case 'splitInterval':
+            case 'splitSize':
+              if (typeof item.value === 'number') {
+                settings[item.key] = item.value;
+              }
+              break;
+            case 'autoSplitEnabled':
+              if (typeof item.value === 'boolean') {
+                settings.autoSplitEnabled = item.value;
+              }
+              break;
+            case 'storageLocation':
+            case 'inputDeviceId':
+              if (typeof item.value === 'string') {
+                settings[item.key] = item.value;
+              }
+              break;
+          }
         });
         resolve(settings);
       };

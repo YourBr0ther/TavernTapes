@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import settingsService, { defaultSettings } from '../../services/SettingsService';
-import { Settings } from '../../services/SettingsService';
-import { RecordingOptions, AudioService } from '../../services/AudioService';
+import settingsService, { Settings, defaultSettings } from '../../services/SettingsService';
+import { AudioService } from '../../services/AudioService';
 import fileSystemService from '../../services/FileSystemService';
 
 // Extend Window interface to include our electron API
@@ -18,74 +17,84 @@ declare global {
   }
 }
 
-const SettingsView: React.FC = () => {
-  const [settings, setSettings] = useState<Settings | null>(null);
+export const SettingsView: React.FC = () => {
+  const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [inputDevices, setInputDevices] = useState<MediaDeviceInfo[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    const loadSettings = async () => {
-      try {
-        const savedSettings = await settingsService.getSettings();
-        setSettings(savedSettings);
-      } catch (error) {
-        console.error('Error loading settings:', error);
-        setSettings(defaultSettings);
-      }
-    };
-
     loadSettings();
     loadInputDevices();
   }, []);
 
-  const loadInputDevices = async () => {
+  const loadSettings = async () => {
     try {
-      setIsLoading(true);
-      const devices = await AudioService.getInputDevices();
-      setInputDevices(devices);
-      
-      // If no device is selected and we have devices, select the first one
-      if (!settings?.inputDeviceId && devices.length > 0) {
-        setSettings((prev) => prev ? { ...prev, inputDeviceId: devices[0].deviceId } : null);
-      }
-    } catch (err) {
-      console.error('Error loading input devices:', err);
-      setError('Failed to load input devices');
-    } finally {
-      setIsLoading(false);
+      const loadedSettings = await settingsService.getSettings();
+      setSettings(loadedSettings);
+    } catch (error) {
+      console.error('Failed to load settings:', error);
     }
   };
 
-  const handleSettingChange = async (key: keyof Settings, value: any) => {
-    if (!settings) return;
-
+  const loadInputDevices = async () => {
     try {
-      const updatedSettings = { ...settings, [key]: value };
-      await settingsService.updateSettings({ [key]: value });
-      setSettings(updatedSettings);
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter(device => device.kind === 'audioinput');
+      setInputDevices(audioInputs);
     } catch (error) {
-      console.error('Error updating settings:', error);
+      console.error('Failed to load input devices:', error);
+    }
+  };
+
+  const handleSettingChange = async (key: keyof Settings, value: Settings[keyof Settings]) => {
+    const updatedSettings: Settings = {
+      ...settings,
+      [key]: value,
+      // Handle aliases
+      ...(key === 'audioFormat' ? { format: value as 'wav' | 'mp3' } : {}),
+      ...(key === 'format' ? { audioFormat: value as 'wav' | 'mp3' } : {}),
+      ...(key === 'audioQuality' ? { quality: value as number } : {}),
+      ...(key === 'quality' ? { audioQuality: value as number } : {})
+    };
+
+    setSettings(updatedSettings);
+    await saveSettings(updatedSettings);
+  };
+
+  const saveSettings = async (updatedSettings: Settings) => {
+    try {
+      setIsSaving(true);
+      await settingsService.updateSettings(updatedSettings);
+    } catch (error) {
+      console.error('Failed to save settings:', error);
+    } finally {
+      setIsSaving(false);
     }
   };
 
   const handleStorageLocationChange = async () => {
+    console.log('Storage location change requested');
     try {
       setIsLoading(true);
       setError(null);
       setSuccess(null);
       
+      console.log('Invoking select-directory');
       const result = await window.electron.ipcRenderer.invoke('select-directory');
+      console.log('Directory selection result:', result);
       
       if (result.success) {
         try {
+          console.log('Updating storage location to:', result.path);
           // First update the FileSystemService
           await fileSystemService.setBaseDirectory(result.path);
           
           // Then update the settings
           const updatedSettings = { ...settings, storageLocation: result.path };
-          await settingsService.updateSettings(updatedSettings);
+          await settingsService.updateSettings({ storageLocation: result.path });
           setSettings(updatedSettings);
           
           setSuccess('Storage location updated successfully. Your recordings will be saved to this location.');
@@ -104,26 +113,12 @@ const SettingsView: React.FC = () => {
           }
         }
       } else {
+        console.error('Directory selection failed:', result.error);
         setError(result.error || 'Failed to select directory. Please try again.');
       }
     } catch (err) {
       console.error('Error changing storage location:', err);
       setError('An unexpected error occurred while selecting the directory. Please try again.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleSave = async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
-      await settingsService.updateSettings(settings);
-      setSuccess('Settings saved successfully');
-      setTimeout(() => setSuccess(null), 3000);
-    } catch (err) {
-      console.error('Error saving settings:', err);
-      setError('Failed to save settings');
     } finally {
       setIsLoading(false);
     }
@@ -167,7 +162,7 @@ const SettingsView: React.FC = () => {
             >
               {inputDevices.map(device => (
                 <option key={device.deviceId} value={device.deviceId}>
-                  {device.label || `Microphone ${device.deviceId.slice(0, 8)}`}
+                  {device.label || `Microphone ${device.deviceId}`}
                 </option>
               ))}
             </select>
@@ -180,7 +175,7 @@ const SettingsView: React.FC = () => {
             </label>
             <select
               value={settings.format}
-              onChange={(e) => handleSettingChange('format', e.target.value)}
+              onChange={(e) => handleSettingChange('format', e.target.value as 'wav' | 'mp3')}
               className="w-full px-4 py-2 rounded-lg bg-[#1C1C1C] border border-[#3A1078]/30 focus:outline-none focus:border-[#FFD700]/50 text-white"
             >
               <option value="wav">WAV</option>
@@ -221,7 +216,7 @@ const SettingsView: React.FC = () => {
 
           {/* Save Button */}
           <button
-            onClick={handleSave}
+            onClick={() => handleSettingChange('format', settings.format)}
             disabled={isLoading}
             className="w-full px-4 py-2 bg-[#3A1078] hover:bg-[#3A1078]/90 rounded-lg text-[#FFD700] font-bold transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -239,19 +234,15 @@ const SettingsView: React.FC = () => {
               Storage Location
             </label>
             <div className="flex items-center space-x-4">
-              <input
-                type="text"
-                value={settings.storageLocation || ''}
-                readOnly
-                className="flex-1 px-4 py-2 rounded-lg bg-[#1C1C1C] border border-[#3A1078]/30 text-white"
-                placeholder="Click 'Change' to select a directory"
-              />
+              <p className="flex-1 text-white">
+                {settings.storageLocation || defaultSettings.storageLocation}
+              </p>
               <button
                 onClick={handleStorageLocationChange}
                 disabled={isLoading}
                 className="px-4 py-2 bg-[#3A1078] hover:bg-[#3A1078]/90 rounded-lg text-[#FFD700] font-bold transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isLoading ? 'Changing...' : 'Change'}
+                Choose Directory
               </button>
             </div>
           </div>

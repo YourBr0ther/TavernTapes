@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom';
 import { TextEncoder, TextDecoder } from 'util';
-import { vi } from 'vitest';
+import { vi, afterEach } from 'vitest';
 
 // Mock the TextEncoder and TextDecoder for tests
 global.TextEncoder = TextEncoder;
@@ -36,24 +36,59 @@ const mockIndexedDB = {
 
 global.indexedDB = mockIndexedDB as any;
 
-// Mock the MediaRecorder
-global.MediaRecorder = vi.fn().mockImplementation(() => ({
+// Mock MediaRecorder
+const mockMediaRecorder = {
   start: vi.fn(),
   stop: vi.fn(),
   pause: vi.fn(),
   resume: vi.fn(),
-  state: 'inactive',
-  ondataavailable: null,
-  onstop: null,
-  onerror: null
-}));
+  ondataavailable: null as ((event: any) => void) | null,
+  state: 'inactive' as 'inactive' | 'recording' | 'paused',
+  addEventListener: vi.fn(),
+  removeEventListener: vi.fn(),
+};
 
-// Mock the navigator.mediaDevices
-global.navigator.mediaDevices = {
-  getUserMedia: vi.fn().mockResolvedValue({
-    getTracks: vi.fn().mockReturnValue([{ stop: vi.fn() }])
-  })
-} as any;
+class MockMediaRecorder {
+  static isTypeSupported(type: string): boolean {
+    return true;
+  }
+
+  start = mockMediaRecorder.start;
+  stop = mockMediaRecorder.stop;
+  pause = mockMediaRecorder.pause;
+  resume = mockMediaRecorder.resume;
+  state = mockMediaRecorder.state;
+  addEventListener = mockMediaRecorder.addEventListener;
+  removeEventListener = mockMediaRecorder.removeEventListener;
+
+  set ondataavailable(handler: ((event: any) => void) | null) {
+    mockMediaRecorder.ondataavailable = handler;
+  }
+
+  get ondataavailable(): ((event: any) => void) | null {
+    return mockMediaRecorder.ondataavailable;
+  }
+}
+
+// Mock navigator.mediaDevices
+const mockMediaDevices = {
+  getUserMedia: vi.fn().mockResolvedValue({}),
+  enumerateDevices: vi.fn().mockResolvedValue([
+    { kind: 'audioinput', deviceId: 'default', label: 'Default' },
+    { kind: 'audioinput', deviceId: 'device1', label: 'Microphone 1' },
+  ]),
+};
+
+// Set up global mocks
+Object.defineProperty(window, 'MediaRecorder', {
+  writable: true,
+  value: MockMediaRecorder,
+});
+
+Object.defineProperty(navigator, 'mediaDevices', {
+  writable: true,
+  value: mockMediaDevices,
+});
 
 // Mock the matchMedia function
 Object.defineProperty(window, 'matchMedia', {
@@ -68,4 +103,9 @@ Object.defineProperty(window, 'matchMedia', {
     removeEventListener: vi.fn(),
     dispatchEvent: vi.fn(),
   })),
+});
+
+// Clean up after each test
+afterEach(() => {
+  vi.clearAllMocks();
 }); 
