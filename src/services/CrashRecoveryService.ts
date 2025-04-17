@@ -1,78 +1,132 @@
 import { RecordingMetadata } from './AudioService';
+import { FileReference } from './FileSystemService';
 
 interface RecoveryState {
   sessionName: string;
   startTime: Date;
   duration: number;
   isPaused: boolean;
-  audioChunks: string[]; // Base64 encoded audio chunks
+  currentFileReference: FileReference | null;
   metadata: RecordingMetadata;
 }
 
 export class CrashRecoveryService {
-  private readonly RECOVERY_KEY = 'tavernTapes_recovery';
+  private static instance: CrashRecoveryService;
+  private readonly DB_NAME = 'tavernTapesRecovery';
+  private readonly DB_VERSION = 1;
+  private db: IDBDatabase | null = null;
   private readonly MAX_RECOVERY_ATTEMPTS = 3;
   private recoveryAttempts: number = 0;
 
-  constructor() {
-    // Clean up any stale recovery data on startup
-    this.cleanupStaleRecovery();
+  private constructor() {
+    this.initializeDB();
   }
 
-  private cleanupStaleRecovery() {
-    const recoveryData = localStorage.getItem(this.RECOVERY_KEY);
-    if (recoveryData) {
-      try {
-        const state = JSON.parse(recoveryData);
-        // If recovery data is more than 24 hours old, remove it
-        if (Date.now() - new Date(state.startTime).getTime() > 24 * 60 * 60 * 1000) {
-          localStorage.removeItem(this.RECOVERY_KEY);
-        }
-      } catch (error) {
-        console.error('Error cleaning up stale recovery data:', error);
-        localStorage.removeItem(this.RECOVERY_KEY);
-      }
+  public static getInstance(): CrashRecoveryService {
+    if (!CrashRecoveryService.instance) {
+      CrashRecoveryService.instance = new CrashRecoveryService();
     }
+    return CrashRecoveryService.instance;
+  }
+
+  private async initializeDB(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(this.DB_NAME, this.DB_VERSION);
+
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        this.db = request.result;
+        resolve();
+      };
+
+      request.onupgradeneeded = (event) => {
+        const db = (event.target as IDBOpenDBRequest).result;
+        if (!db.objectStoreNames.contains('recovery')) {
+          const store = db.createObjectStore('recovery', { keyPath: 'id' });
+          store.createIndex('startTime', 'startTime', { unique: false });
+        }
+      };
+    });
+  }
+
+  private async getDB(): Promise<IDBDatabase> {
+    if (!this.db) {
+      await this.initializeDB();
+    }
+    return this.db!;
+  }
+
+  private cleanupStaleRecovery(): void {
+    const db = this.db;
+    if (!db) return;
+
+    const transaction = db.transaction('recovery', 'readwrite');
+    const store = transaction.objectStore('recovery');
+    const index = store.index('startTime');
+    const request = index.getAll();
+
+    request.onsuccess = () => {
+      const states = request.result;
+      const now = Date.now();
+      const staleStates = states.filter(state => 
+        now - new Date(state.startTime).getTime() > 24 * 60 * 60 * 1000
+      );
+
+      staleStates.forEach(state => {
+        store.delete(state.id);
+      });
+    };
   }
 
   async saveState(state: RecoveryState): Promise<void> {
-    try {
-      // Convert audio chunks to base64 for storage
-      const serializedState = {
-        ...state,
-        audioChunks: state.audioChunks.map(chunk => btoa(chunk))
-      };
-      localStorage.setItem(this.RECOVERY_KEY, JSON.stringify(serializedState));
-    } catch (error) {
-      console.error('Error saving recovery state:', error);
-      throw new Error('Failed to save recovery state');
-    }
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('recovery', 'readwrite');
+      const store = transaction.objectStore('recovery');
+      const request = store.put({ id: 'current', ...state });
+
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
   }
 
   async getRecoveryState(): Promise<RecoveryState | null> {
-    try {
-      const recoveryData = localStorage.getItem(this.RECOVERY_KEY);
-      if (!recoveryData) return null;
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('recovery', 'readonly');
+      const store = transaction.objectStore('recovery');
+      const request = store.get('current');
 
-      const state = JSON.parse(recoveryData);
-      // Convert base64 audio chunks back to strings
-      return {
-        ...state,
-        audioChunks: state.audioChunks.map((chunk: string) => atob(chunk)),
-        startTime: new Date(state.startTime)
+      request.onsuccess = () => {
+        if (!request.result) {
+          resolve(null);
+          return;
+        }
+
+        const state = request.result;
+        resolve({
+          ...state,
+          startTime: new Date(state.startTime),
+          currentFileReference: state.currentFileReference ? {
+            ...state.currentFileReference,
+            createdAt: new Date(state.currentFileReference.createdAt)
+          } : null
+        });
       };
-    } catch (error) {
-      console.error('Error getting recovery state:', error);
-      return null;
-    }
+      request.onerror = () => reject(request.error);
+    });
   }
 
   async clearRecoveryState(): Promise<void> {
-    try {
-      localStorage.removeItem(this.RECOVERY_KEY);
-    } catch (error) {
-      console.error('Error clearing recovery state:', error);
-    }
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('recovery', 'readwrite');
+      const store = transaction.objectStore('recovery');
+      const request = store.delete('current');
+
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
   }
 
   incrementRecoveryAttempts(): boolean {

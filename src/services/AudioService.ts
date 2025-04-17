@@ -1,6 +1,7 @@
 import RecordRTC from 'recordrtc';
 import sessionService from './SessionService';
 import { CrashRecoveryService } from './CrashRecoveryService';
+import fileSystemService, { FileReference } from './FileSystemService';
 
 export interface RecordingOptions {
   format: 'wav' | 'mp3';
@@ -22,6 +23,7 @@ export interface RecordingMetadata {
 export type AudioLevelCallback = (level: number) => void;
 
 export class AudioService {
+  private static instance: AudioService;
   private recorder: RecordRTC | null = null;
   private audioChunks: Blob[] = [];
   private recordingStartTime: Date | null = null;
@@ -41,10 +43,19 @@ export class AudioService {
   private lastSplitTime: number = 0;
   private crashRecoveryService: CrashRecoveryService;
   private stateSaveInterval: NodeJS.Timeout | null = null;
+  private currentSessionId: string | null = null;
+  private currentFileReference: FileReference | null = null;
 
-  constructor(options: RecordingOptions) {
+  private constructor(options: RecordingOptions) {
     this.recordingOptions = options;
-    this.crashRecoveryService = new CrashRecoveryService();
+    this.crashRecoveryService = CrashRecoveryService.getInstance();
+  }
+
+  public static getInstance(options: RecordingOptions): AudioService {
+    if (!AudioService.instance) {
+      AudioService.instance = new AudioService(options);
+    }
+    return AudioService.instance;
   }
 
   // Add method to get available input devices
@@ -60,37 +71,29 @@ export class AudioService {
 
   async startRecording(sessionName: string = ''): Promise<void> {
     try {
-      // Check for recovery state first
       const recoveryState = await this.crashRecoveryService.getRecoveryState();
       if (recoveryState) {
-        // If we have recovery state, ask the user if they want to recover
         const shouldRecover = window.confirm(
           'A previous recording session was interrupted. Would you like to recover it?'
         );
         
         if (shouldRecover) {
-          // Restore the recording state
           this.currentSessionName = recoveryState.sessionName;
           this.recordingStartTime = recoveryState.startTime;
           this.currentDuration = recoveryState.duration;
           this.isPaused = recoveryState.isPaused;
-          this.audioChunks = recoveryState.audioChunks.map(chunk => new Blob([chunk]));
-          
-          // Clear the recovery state
+          this.currentFileReference = recoveryState.currentFileReference;
           await this.crashRecoveryService.clearRecoveryState();
         }
       }
 
-      // Check if recording is already in progress
       if (this.isRecording) {
         throw new Error('Recording is already in progress');
       }
 
-      // Request permissions first
       const permissionResult = await navigator.mediaDevices.getUserMedia({ audio: true });
-      permissionResult.getTracks().forEach(track => track.stop()); // Stop the test stream
+      permissionResult.getTracks().forEach(track => track.stop());
 
-      // Now get the actual recording stream with settings
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
           deviceId: this.recordingOptions.inputDeviceId ? { exact: this.recordingOptions.inputDeviceId } : undefined,
@@ -103,9 +106,7 @@ export class AudioService {
       });
 
       this.mediaStream = stream;
-      this.lastSplitTime = Date.now();
 
-      // Set up audio analysis
       try {
         this.audioContext = new AudioContext();
         const source = this.audioContext.createMediaStreamSource(stream);
@@ -115,7 +116,6 @@ export class AudioService {
         this.startAudioLevelMonitoring();
       } catch (error) {
         console.error('Audio analysis setup failed:', error);
-        // Continue with recording even if visualization fails
       }
 
       const options = {
@@ -127,18 +127,27 @@ export class AudioService {
         numberOfAudioChannels: 2,
         desiredSampRate: 44100,
         bitrate: this.recordingOptions.quality * 1000,
-        timeSlice: 1000, // Get data every second
-        ondataavailable: (blob: Blob) => {
+        timeSlice: 1000,
+        ondataavailable: async (blob: Blob) => {
           if (this.isRecording && !this.isPaused) {
-            this.audioChunks.push(blob);
-            
-            // Check if we need to split based on memory management
-            if (this.audioChunks.length >= this.maxChunks) {
-              this.splitRecording();
+            if (!this.currentSessionId) {
+              this.currentSessionId = crypto.randomUUID();
             }
-            
-            // Check if we need to split based on time or size
-            this.checkSplitConditions();
+
+            const metadata: RecordingMetadata = {
+              sessionName: this.currentSessionName,
+              startTime: this.recordingStartTime!,
+              duration: this.currentDuration,
+              fileSize: blob.size,
+              format: this.recordingOptions.format,
+              quality: this.recordingOptions.quality
+            };
+
+            this.currentFileReference = await fileSystemService.saveAudioFile(
+              this.currentSessionId,
+              blob,
+              metadata
+            );
           }
         },
         onerror: (error: any) => {
@@ -150,7 +159,6 @@ export class AudioService {
 
       this.recorder = new RecordRTC(stream, options);
       
-      // Format the date and time for the default session name
       const date = new Date();
       const formattedDate = date.toISOString().split('T')[0];
       const hours = date.getHours().toString().padStart(2, '0');
@@ -162,10 +170,10 @@ export class AudioService {
       this.isRecording = true;
       this.isPaused = false;
       this.currentDuration = 0;
+      this.currentSessionId = crypto.randomUUID();
 
       await this.recorder.startRecording();
       this.startTimer();
-
       this.startStateSaving();
     } catch (error) {
       this.cleanup();
@@ -366,66 +374,59 @@ export class AudioService {
   }
 
   private async saveRecording(blob: Blob, metadata: RecordingMetadata): Promise<void> {
-    // Convert blob to base64 for storage
-    const reader = new FileReader();
-    reader.readAsDataURL(blob);
-    
-    await new Promise<void>((resolve) => {
-      reader.onloadend = () => {
-        const base64data = reader.result as string;
-        const base64Content = base64data.split(',')[1];
-        
-        // Get existing recordings
-        const recordings = JSON.parse(localStorage.getItem('tavernTapes_recordings') || '{}');
-        
-        // Create or update session recordings
-        const sessionId = metadata.sessionName;
-        if (!recordings[sessionId]) {
-          recordings[sessionId] = [];
-        }
-        
-        // Add new recording
-        recordings[sessionId].push({
-          data: base64Content,
-          mimeType: blob.type,
-          timestamp: new Date().toISOString()
-        });
-        
-        // Save back to storage
-        localStorage.setItem('tavernTapes_recordings', JSON.stringify(recordings));
-        
-        // Add to session service
-        sessionService.addSession(metadata);
-        
-        resolve();
+    if (!this.currentSessionId) {
+      throw new Error('No active session');
+    }
+
+    try {
+      // Save the recording using FileSystemService
+      const fileReference = await fileSystemService.saveAudioFile(
+        this.currentSessionId,
+        blob,
+        metadata
+      );
+
+      // Update the current file reference
+      this.currentFileReference = fileReference;
+
+      // Save the session metadata
+      const session: Session = {
+        id: this.currentSessionId,
+        name: metadata.sessionName,
+        startTime: metadata.startTime,
+        duration: metadata.duration,
+        fileSize: metadata.fileSize,
+        format: metadata.format,
+        quality: metadata.quality
       };
-    });
+
+      await sessionService.addSession(session);
+    } catch (error) {
+      console.error('Error saving recording:', error);
+      throw new Error('Failed to save recording');
+    }
   }
 
   private async saveState(): Promise<void> {
-    if (!this.isRecording || !this.recorder) return;
+    if (!this.isRecording) return;
 
-    try {
-      const state = {
+    const state = {
+      sessionName: this.currentSessionName,
+      startTime: this.recordingStartTime,
+      duration: this.currentDuration,
+      isPaused: this.isPaused,
+      currentFileReference: this.currentFileReference,
+      metadata: {
         sessionName: this.currentSessionName,
         startTime: this.recordingStartTime!,
         duration: this.currentDuration,
-        isPaused: this.isPaused,
-        audioChunks: this.audioChunks.map(chunk => chunk.toString()),
-        metadata: {
-          sessionName: this.currentSessionName,
-          startTime: this.recordingStartTime!,
-          duration: this.currentDuration,
-          fileSize: this.audioChunks.reduce((acc, chunk) => acc + chunk.size, 0),
-          format: this.recordingOptions.format,
-          quality: this.recordingOptions.quality
-        }
-      };
+        fileSize: this.currentFileReference?.size || 0,
+        format: this.recordingOptions.format,
+        quality: this.recordingOptions.quality
+      }
+    };
 
-      await this.crashRecoveryService.saveState(state);
-    } catch (error) {
-      console.error('Error saving state:', error);
-    }
+    await this.crashRecoveryService.saveState(state);
   }
 
   private startStateSaving(): void {
@@ -443,28 +444,25 @@ export class AudioService {
   }
 
   private cleanup(): void {
+    this.stopTimer();
+    this.stopAudioLevelMonitoring();
+    this.stopStateSaving();
+    
     if (this.recorder) {
-      this.recorder.destroy();
+      this.recorder.stopRecording();
       this.recorder = null;
     }
+    
     if (this.mediaStream) {
       this.mediaStream.getTracks().forEach(track => track.stop());
       this.mediaStream = null;
     }
-    if (this.audioContext) {
-      this.audioContext.close();
-      this.audioContext = null;
-    }
-    if (this.animationFrameId) {
-      cancelAnimationFrame(this.animationFrameId);
-      this.animationFrameId = null;
-    }
-    this.audioChunks = [];
-    this.recordingStartTime = null;
-    this.currentSessionName = '';
+    
+    this.isRecording = false;
+    this.isPaused = false;
     this.currentDuration = 0;
-    this.lastSplitTime = 0;
-    this.stopStateSaving();
+    this.currentSessionId = null;
+    this.currentFileReference = null;
   }
 
   getCurrentDuration(): number {

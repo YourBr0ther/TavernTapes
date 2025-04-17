@@ -1,34 +1,27 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
+import settingsService from '../../services/SettingsService';
+import { Settings } from '../../services/SettingsService';
 import { RecordingOptions, AudioService } from '../../services/AudioService';
 
-interface SettingsViewProps {
-  onSettingsChange?: (settings: RecordingOptions) => void;
-}
-
-const SettingsView: React.FC<SettingsViewProps> = ({ onSettingsChange }) => {
-  const [settings, setSettings] = useState<RecordingOptions>({
-    format: 'wav',
-    quality: 128,
-    splitInterval: 30,
-    splitSize: 500,
-    inputDeviceId: undefined
-  });
+const SettingsView: React.FC = () => {
+  const [settings, setSettings] = useState<Settings | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [inputDevices, setInputDevices] = useState<MediaDeviceInfo[]>([]);
 
   useEffect(() => {
-    // Load saved settings from localStorage
-    const savedSettings = localStorage.getItem('tavernTapesSettings');
-    if (savedSettings) {
+    const loadSettings = async () => {
       try {
-        setSettings(JSON.parse(savedSettings));
-      } catch (err) {
-        console.error('Error loading settings:', err);
-        setError('Failed to load saved settings');
+        const savedSettings = await settingsService.getSettings();
+        setSettings(savedSettings);
+      } catch (error) {
+        console.error('Error loading settings:', error);
+        setSettings(settingsService.defaultSettings);
       }
-    }
+    };
+
+    loadSettings();
 
     // Load input devices
     loadInputDevices();
@@ -41,7 +34,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onSettingsChange }) => {
       setInputDevices(devices);
       
       // If no device is selected and we have devices, select the first one
-      if (!settings.inputDeviceId && devices.length > 0) {
+      if (!settings?.inputDeviceId && devices.length > 0) {
         setSettings(prev => ({ ...prev, inputDeviceId: devices[0].deviceId }));
       }
     } catch (err) {
@@ -52,19 +45,16 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onSettingsChange }) => {
     }
   };
 
-  const handleSettingChange = (key: keyof RecordingOptions, value: any) => {
-    // Validate numeric inputs
-    if (['quality', 'splitInterval', 'splitSize'].includes(key)) {
-      const numValue = Number(value);
-      if (isNaN(numValue) || numValue < 0) {
-        setError(`Invalid value for ${key}`);
-        return;
-      }
-    }
+  const handleSettingChange = async (key: keyof Settings, value: any) => {
+    if (!settings) return;
 
-    const newSettings = { ...settings, [key]: value };
-    setSettings(newSettings);
-    setError(null);
+    try {
+      const updatedSettings = { ...settings, [key]: value };
+      await settingsService.updateSettings({ [key]: value });
+      setSettings(updatedSettings);
+    } catch (error) {
+      console.error('Error updating settings:', error);
+    }
   };
 
   const handleStorageLocationChange = async () => {
@@ -86,8 +76,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onSettingsChange }) => {
     try {
       setIsLoading(true);
       setError(null);
-      localStorage.setItem('tavernTapesSettings', JSON.stringify(settings));
-      onSettingsChange?.(settings);
+      await settingsService.updateSettings(settings);
       setSuccess('Settings saved successfully');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
@@ -97,6 +86,10 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onSettingsChange }) => {
       setIsLoading(false);
     }
   };
+
+  if (!settings) {
+    return <div>Loading settings...</div>;
+  }
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[calc(100vh-8rem)] p-6">

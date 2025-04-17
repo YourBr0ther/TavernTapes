@@ -1,7 +1,9 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, lazy, Suspense } from 'react';
 import { AudioService, RecordingOptions } from '../../services/AudioService';
 import { formatTime } from '../../utils/timeUtils';
-import RecoveryDialog from '../dialogs/RecoveryDialog';
+
+// Lazy load the RecoveryDialog
+const RecoveryDialog = lazy(() => import('../dialogs/RecoveryDialog'));
 
 interface RecordingViewProps {
   onRecordingComplete: (metadata: any) => void;
@@ -270,13 +272,17 @@ const RecordingView: React.FC<RecordingViewProps> = ({ onRecordingComplete, sett
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[calc(100vh-8rem)] p-6">
-      {showRecoveryDialog && recoveryState && (
-        <RecoveryDialog
-          sessionName={recoveryState.sessionName}
-          duration={recoveryState.duration}
-          onRecover={handleRecover}
-          onDiscard={handleDiscard}
-        />
+      {showRecoveryDialog && (
+        <Suspense fallback={<div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
+        </div>}>
+          <RecoveryDialog
+            sessionName={recoveryState?.sessionName || ''}
+            duration={recoveryState?.duration || 0}
+            onRecover={handleRecover}
+            onDiscard={handleDiscard}
+          />
+        </Suspense>
       )}
       <div className="w-full max-w-2xl space-y-8">
         {/* Error Message */}

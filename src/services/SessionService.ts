@@ -1,188 +1,164 @@
-import { RecordingMetadata } from './AudioService';
+import fileSystemService from './FileSystemService';
 
 export interface Session {
   id: string;
-  metadata: RecordingMetadata;
+  name: string;
+  startTime: Date;
+  duration: number;
+  fileSize: number;
+  format: string;
+  quality: number;
   notes?: string;
   tags?: string[];
-  createdAt: Date;
-  updatedAt: Date;
 }
 
 export interface ExportOptions {
-  format?: 'wav' | 'mp3';
-  quality?: number;
-  includeMetadata?: boolean;
+  format: 'wav' | 'mp3';
+  quality: number;
 }
 
 class SessionService {
-  private readonly STORAGE_KEY = 'tavernTapes_sessions';
-  private readonly RECORDINGS_STORAGE_KEY = 'tavernTapes_recordings';
+  private static instance: SessionService;
+  private db: IDBDatabase | null = null;
 
-  constructor() {
-    // Initialize storage if it doesn't exist
-    if (!localStorage.getItem(this.STORAGE_KEY)) {
-      localStorage.setItem(this.STORAGE_KEY, JSON.stringify([]));
+  private constructor() {
+    this.initDB();
+  }
+
+  public static getInstance(): SessionService {
+    if (!SessionService.instance) {
+      SessionService.instance = new SessionService();
     }
-    if (!localStorage.getItem(this.RECORDINGS_STORAGE_KEY)) {
-      localStorage.setItem(this.RECORDINGS_STORAGE_KEY, JSON.stringify({}));
+    return SessionService.instance;
+  }
+
+  private async initDB(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open('tavernTapesSessions', 1);
+
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        this.db = request.result;
+        resolve();
+      };
+
+      request.onupgradeneeded = (event) => {
+        const db = (event.target as IDBOpenDBRequest).result;
+        if (!db.objectStoreNames.contains('sessions')) {
+          const store = db.createObjectStore('sessions', { keyPath: 'id' });
+          store.createIndex('startTime', 'startTime', { unique: false });
+        }
+      };
+    });
+  }
+
+  private async getDB(): Promise<IDBDatabase> {
+    if (!this.db) {
+      await this.initDB();
     }
+    return this.db!;
   }
 
-  async getAllSessions(): Promise<Session[]> {
-    const sessions = localStorage.getItem(this.STORAGE_KEY);
-    return sessions ? JSON.parse(sessions) : [];
+  public async addSession(session: Session): Promise<void> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(['sessions'], 'readwrite');
+      const store = transaction.objectStore('sessions');
+      const request = store.add(session);
+
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
   }
 
-  async getSessionById(id: string): Promise<Session | null> {
+  public async getSession(id: string): Promise<Session | null> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(['sessions'], 'readonly');
+      const store = transaction.objectStore('sessions');
+      const request = store.get(id);
+
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  public async getAllSessions(): Promise<Session[]> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(['sessions'], 'readonly');
+      const store = transaction.objectStore('sessions');
+      const request = store.getAll();
+
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  public async updateSession(session: Session): Promise<void> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(['sessions'], 'readwrite');
+      const store = transaction.objectStore('sessions');
+      const request = store.put(session);
+
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  public async deleteSession(id: string): Promise<void> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(['sessions'], 'readwrite');
+      const store = transaction.objectStore('sessions');
+      const request = store.delete(id);
+
+      request.onsuccess = async () => {
+        try {
+          // Delete associated files
+          const fileReference = await fileSystemService.getFileReference(id);
+          if (fileReference) {
+            await fileSystemService.deleteAudioFile(fileReference);
+          }
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  public async searchSessions(query: string): Promise<Session[]> {
     const sessions = await this.getAllSessions();
-    return sessions.find(session => session.id === id) || null;
-  }
-
-  async addSession(metadata: RecordingMetadata): Promise<Session> {
-    const sessions = await this.getAllSessions();
+    const searchTerms = query.toLowerCase().split(' ');
     
-    const newSession: Session = {
-      id: crypto.randomUUID(),
-      metadata,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-
-    sessions.push(newSession);
-    localStorage.setItem(this.STORAGE_KEY, JSON.stringify(sessions));
-    
-    return newSession;
+    return sessions.filter(session => {
+      const sessionText = [
+        session.name,
+        session.notes || '',
+        ...(session.tags || [])
+      ].join(' ').toLowerCase();
+      
+      return searchTerms.every(term => sessionText.includes(term));
+    });
   }
 
-  async updateSession(id: string, updates: Partial<Session>): Promise<Session | null> {
-    const sessions = await this.getAllSessions();
-    const index = sessions.findIndex(session => session.id === id);
-    
-    if (index === -1) return null;
-
-    const updatedSession = {
-      ...sessions[index],
-      ...updates,
-      updatedAt: new Date()
-    };
-
-    sessions[index] = updatedSession;
-    localStorage.setItem(this.STORAGE_KEY, JSON.stringify(sessions));
-    
-    return updatedSession;
-  }
-
-  async deleteSession(id: string): Promise<boolean> {
-    const sessions = await this.getAllSessions();
-    const filteredSessions = sessions.filter(session => session.id !== id);
-    
-    if (filteredSessions.length === sessions.length) {
-      return false;
-    }
-
-    localStorage.setItem(this.STORAGE_KEY, JSON.stringify(filteredSessions));
-    return true;
-  }
-
-  async addNoteToSession(id: string, note: string): Promise<Session | null> {
-    return this.updateSession(id, { notes: note });
-  }
-
-  async addTagsToSession(id: string, tags: string[]): Promise<Session | null> {
-    const session = await this.getSessionById(id);
-    if (!session) return null;
-
-    const existingTags = session.tags || [];
-    const uniqueTags = [...new Set([...existingTags, ...tags])];
-    
-    return this.updateSession(id, { tags: uniqueTags });
-  }
-
-  async removeTagFromSession(id: string, tag: string): Promise<Session | null> {
-    const session = await this.getSessionById(id);
-    if (!session || !session.tags) return null;
-
-    const updatedTags = session.tags.filter(t => t !== tag);
-    return this.updateSession(id, { tags: updatedTags });
-  }
-
-  async searchSessions(query: string): Promise<Session[]> {
-    const sessions = await this.getAllSessions();
-    const lowerQuery = query.toLowerCase();
-
-    return sessions.filter(session => 
-      session.metadata.sessionName.toLowerCase().includes(lowerQuery) ||
-      session.notes?.toLowerCase().includes(lowerQuery) ||
-      session.tags?.some(tag => tag.toLowerCase().includes(lowerQuery))
-    );
-  }
-
-  async exportSession(id: string, options: ExportOptions = {}): Promise<Blob> {
-    const session = await this.getSessionById(id);
+  public async exportSession(id: string, options: ExportOptions): Promise<Blob> {
+    const session = await this.getSession(id);
     if (!session) {
       throw new Error('Session not found');
     }
 
-    const recordings = JSON.parse(localStorage.getItem(this.RECORDINGS_STORAGE_KEY) || '{}');
-    const sessionRecordings = recordings[id];
-    
-    if (!sessionRecordings || sessionRecordings.length === 0) {
-      throw new Error('No recordings found for this session');
+    const fileReference = await fileSystemService.getFileReference(id);
+    if (!fileReference) {
+      throw new Error('Session file not found');
     }
 
-    // If there's only one recording part, return it directly
-    if (sessionRecordings.length === 1) {
-      return this.base64ToBlob(sessionRecordings[0].data, sessionRecordings[0].mimeType);
-    }
-
-    // For multiple parts, combine them
-    const blobs = sessionRecordings.map(recording => 
-      this.base64ToBlob(recording.data, recording.mimeType)
-    );
-
-    // Combine all blobs into one
-    return new Blob(blobs, { type: sessionRecordings[0].mimeType });
-  }
-
-  async exportSessionToFile(id: string, options: ExportOptions = {}): Promise<void> {
-    const blob = await this.exportSession(id, options);
-    const session = await this.getSessionById(id);
-    
-    if (!session) {
-      throw new Error('Session not found');
-    }
-
-    // Create a download link
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${session.metadata.sessionName}.${session.metadata.format}`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }
-
-  private base64ToBlob(base64: string, mimeType: string): Blob {
-    const byteCharacters = atob(base64);
-    const byteArrays = [];
-
-    for (let offset = 0; offset < byteCharacters.length; offset += 512) {
-      const slice = byteCharacters.slice(offset, offset + 512);
-      const byteNumbers = new Array(slice.length);
-      
-      for (let i = 0; i < slice.length; i++) {
-        byteNumbers[i] = slice.charCodeAt(i);
-      }
-      
-      const byteArray = new Uint8Array(byteNumbers);
-      byteArrays.push(byteArray);
-    }
-
-    return new Blob(byteArrays, { type: mimeType });
+    const audioBlob = await fileSystemService.getAudioFile(fileReference);
+    return audioBlob;
   }
 }
 
-export const sessionService = new SessionService();
-export default sessionService; 
+export default SessionService.getInstance(); 
