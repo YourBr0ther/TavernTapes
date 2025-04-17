@@ -12,7 +12,7 @@
     "preview": "vite preview",
     "electron:dev": "concurrently \"npm run dev\" \"npm run build:main\" \"wait-on http://localhost:5174 && cross-env NODE_ENV=development electron .\"",
     "electron:build": "npm run build && npm run build:main && electron-builder",
-    "test": "vitest",
+    "test": "vitest --run",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage"
   },
@@ -33,6 +33,7 @@
     "@testing-library/user-event": "^14.6.1",
     "@types/react": "^18.2.55",
     "@types/react-dom": "^18.2.19",
+    "@types/recordrtc": "^5.6.14",
     "@vitejs/plugin-react": "^4.2.1",
     "@vitest/ui": "^3.1.1",
     "autoprefixer": "^10.4.17",

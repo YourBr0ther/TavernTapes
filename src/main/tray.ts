@@ -18,6 +18,10 @@ export class TrayManager {
     this.initializeTray();
   }
 
+  public get recording(): boolean {
+    return this.isRecording;
+  }
+
   private initializeTray() {
     // Create tray icon
     const iconPath = join(__dirname, '..', 'public', 'logo.png');

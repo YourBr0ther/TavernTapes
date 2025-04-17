@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import MainLayout from './components/layout/MainLayout';
 import { RecordingOptions } from './services/AudioService';
 import settingsService from './services/SettingsService';
+import fileSystemService from './services/FileSystemService';
 import { Settings } from './services/SettingsService';
 
 // Lazy load the view components
@@ -25,27 +26,42 @@ const App: React.FC = () => {
     splitSize: 500
   });
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [isInitialized, setIsInitialized] = useState(false);
 
   useEffect(() => {
-    const loadSettings = async () => {
+    const initializeApp = async () => {
       try {
+        // Load settings and initialize storage location
         const savedSettings = await settingsService.getSettings();
         setSettings(savedSettings);
+        
+        // If we have a storage location, set it in the FileSystemService
+        if (savedSettings.storageLocation) {
+          await fileSystemService.setBaseDirectory(savedSettings.storageLocation);
+        } else {
+          // If no storage location is set, create a default one in the user's documents folder
+          const defaultPath = 'TavernTapes_Recordings';
+          await fileSystemService.setBaseDirectory(defaultPath);
+          await settingsService.updateSettings({ storageLocation: defaultPath });
+          savedSettings.storageLocation = defaultPath;
+          setSettings(savedSettings);
+        }
+        
+        setIsInitialized(true);
       } catch (error) {
-        console.error('Error loading settings:', error);
-        // Use default settings if loading fails
-        setSettings(settingsService.defaultSettings);
+        console.error('Error initializing app:', error);
+        setIsInitialized(true); // Still set initialized to true so the app can load
       }
     };
 
-    loadSettings();
+    initializeApp();
   }, []);
 
   const handleSettingsChange = (settings: RecordingOptions) => {
     setRecordingSettings(settings);
   };
 
-  if (!settings) {
+  if (!isInitialized || !settings) {
     return <LoadingSpinner />;
   }
 

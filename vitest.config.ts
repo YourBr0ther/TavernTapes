@@ -5,10 +5,10 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: 'jsdom',
+    testTimeout: 30000,
+    setupFiles: ['./src/test/setup.ts'],
     globals: true,
-    setupFiles: ['./src/setupTests.ts'],
     coverage: {
-      provider: 'v8',
       reporter: ['text', 'json', 'html'],
     },
   },

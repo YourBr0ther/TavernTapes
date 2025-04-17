@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import settingsService from '../../services/SettingsService';
 import { Settings } from '../../services/SettingsService';
 import { RecordingOptions, AudioService } from '../../services/AudioService';
+import fileSystemService from '../../services/FileSystemService';
 
 const SettingsView: React.FC = () => {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -61,9 +62,22 @@ const SettingsView: React.FC = () => {
     try {
       setIsLoading(true);
       setError(null);
-      // Implement storage location change logic here
-      // This would typically open a file dialog
-      setSuccess('Storage location updated successfully');
+      
+      const result = await window.electron.ipcRenderer.invoke('select-directory');
+      
+      if (result.success) {
+        // First update the FileSystemService
+        await fileSystemService.setBaseDirectory(result.path);
+        
+        // Then update the settings
+        const updatedSettings = { ...settings, storageLocation: result.path };
+        await settingsService.updateSettings(updatedSettings);
+        setSettings(updatedSettings);
+        
+        setSuccess('Storage location updated successfully');
+      } else {
+        setError(result.error || 'Failed to select directory');
+      }
     } catch (err) {
       console.error('Error changing storage location:', err);
       setError('Failed to change storage location');
@@ -199,9 +213,10 @@ const SettingsView: React.FC = () => {
             <div className="flex items-center space-x-4">
               <input
                 type="text"
-                value={settings.storageLocation}
+                value={settings.storageLocation || ''}
                 readOnly
                 className="flex-1 px-4 py-2 rounded-lg bg-[#1C1C1C] border border-[#3A1078]/30 text-white"
+                placeholder="Click 'Change' to select a directory"
               />
               <button
                 onClick={handleStorageLocationChange}

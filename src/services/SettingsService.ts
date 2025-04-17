@@ -1,11 +1,11 @@
-interface Settings {
+export interface Settings {
   theme: 'light' | 'dark';
   audioFormat: 'wav' | 'mp3';
   audioQuality: number;
   autoSplitEnabled: boolean;
   splitInterval: number;
   splitSize: number;
-  defaultSaveLocation: string;
+  storageLocation: string;
 }
 
 class SettingsService {
@@ -13,6 +13,7 @@ class SettingsService {
   private readonly DB_NAME = 'tavernTapesSettings';
   private readonly DB_VERSION = 1;
   private db: IDBDatabase | null = null;
+  private initializationPromise: Promise<void> | null = null;
   private defaultSettings: Settings = {
     theme: 'dark',
     audioFormat: 'wav',
@@ -20,11 +21,11 @@ class SettingsService {
     autoSplitEnabled: true,
     splitInterval: 30, // minutes
     splitSize: 500, // MB
-    defaultSaveLocation: 'TavernTapes_Recordings'
+    storageLocation: 'TavernTapes_Recordings'
   };
 
   private constructor() {
-    this.initializeDB();
+    this.initializationPromise = this.initializeDB();
   }
 
   public static getInstance(): SettingsService {
@@ -55,7 +56,10 @@ class SettingsService {
 
   private async getDB(): Promise<IDBDatabase> {
     if (!this.db) {
-      await this.initializeDB();
+      if (!this.initializationPromise) {
+        this.initializationPromise = this.initializeDB();
+      }
+      await this.initializationPromise;
     }
     return this.db!;
   }
@@ -69,8 +73,8 @@ class SettingsService {
 
       request.onsuccess = () => {
         const settings = { ...this.defaultSettings };
-        request.result.forEach(item => {
-          settings[item.key as keyof Settings] = item.value;
+        request.result.forEach((item: { key: keyof Settings; value: Settings[keyof Settings] }) => {
+          settings[item.key] = item.value;
         });
         resolve(settings);
       };
@@ -111,4 +115,5 @@ class SettingsService {
   }
 }
 
+export { SettingsService };
 export default SettingsService.getInstance(); 

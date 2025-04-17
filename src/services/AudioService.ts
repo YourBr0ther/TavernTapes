@@ -3,6 +3,25 @@ import sessionService from './SessionService';
 import { CrashRecoveryService } from './CrashRecoveryService';
 import fileSystemService, { FileReference } from './FileSystemService';
 
+interface Session {
+  id: string;
+  name: string;
+  startTime: Date;
+  duration: number;
+  fileSize: number;
+  format: string;
+  quality: number;
+}
+
+interface RecoveryState {
+  sessionName: string;
+  startTime: Date;
+  duration: number;
+  isPaused: boolean;
+  currentFileReference: FileReference | null;
+  metadata: RecordingMetadata;
+}
+
 export interface RecordingOptions {
   format: 'wav' | 'mp3';
   quality: number;
@@ -118,11 +137,11 @@ export class AudioService {
         console.error('Audio analysis setup failed:', error);
       }
 
-      const options = {
+      const options: RecordRTC.Options & { onerror?: (error: any) => void } = {
         type: 'audio',
         mimeType: this.recordingOptions.format === 'wav' 
           ? 'audio/wav' 
-          : 'audio/mp3',
+          : 'audio/webm',
         recorderType: RecordRTC.StereoAudioRecorder,
         numberOfAudioChannels: 2,
         desiredSampRate: 44100,
@@ -153,7 +172,7 @@ export class AudioService {
         onerror: (error: any) => {
           console.error('RecordRTC error:', error);
           this.cleanup();
-          throw new Error('Recording failed: ' + error);
+          throw new Error('Recording failed: ' + error.message);
         }
       };
 
@@ -248,29 +267,77 @@ export class AudioService {
       throw new Error('No recording in progress');
     }
 
-    return new Promise((resolve, reject) => {
-      if (!this.recorder) {
-        reject(new Error('Recorder not initialized'));
-        return;
-      }
+    if (!this.recorder) {
+      throw new Error('Recorder not initialized');
+    }
 
-      this.recorder.stopRecording(async () => {
-        const blob = this.recorder!.getBlob();
-        const metadata: RecordingMetadata = {
-          sessionName: this.currentSessionName,
-          startTime: this.recordingStartTime!,
-          duration: this.currentDuration,
-          fileSize: blob.size,
-          format: this.recordingOptions.format,
-          quality: this.recordingOptions.quality
-        };
+    if (this.isPaused) {
+      // Resume recording before stopping to ensure proper state
+      this.resumeRecording();
+    }
 
-        await this.saveRecording(blob, metadata);
+    return new Promise<RecordingMetadata>((resolve, reject) => {
+      try {
+        // Set a flag to prevent multiple stop attempts
+        let stopCompleted = false;
+
+        // Set a timeout to prevent hanging
+        const timeoutId = setTimeout(() => {
+          if (!stopCompleted) {
+            stopCompleted = true;
+            this.cleanup();
+            reject(new Error('Recording stop operation timed out'));
+          }
+        }, 10000); // 10 second timeout
+
+        // First, get the current blob before stopping
+        const currentBlob = this.recorder!.getBlob();
+        if (!currentBlob) {
+          clearTimeout(timeoutId);
+          this.cleanup();
+          reject(new Error('Failed to get recording blob'));
+          return;
+        }
+
+        this.recorder!.stopRecording(async () => {
+          try {
+            if (stopCompleted) return; // Prevent double execution
+            stopCompleted = true;
+            clearTimeout(timeoutId);
+
+            const metadata: RecordingMetadata = {
+              sessionName: this.currentSessionName,
+              startTime: this.recordingStartTime!,
+              duration: this.currentDuration,
+              fileSize: currentBlob.size,
+              format: this.recordingOptions.format,
+              quality: this.recordingOptions.quality
+            };
+
+            // Save recording before cleanup
+            await this.saveRecording(currentBlob, metadata);
+            await this.crashRecoveryService.clearRecoveryState();
+            
+            // Stop timers and monitoring before cleanup
+            this.stopTimer();
+            this.stopStateSaving();
+            this.stopAudioLevelMonitoring();
+            
+            // Final cleanup
+            this.cleanup();
+            
+            resolve(metadata);
+          } catch (error) {
+            console.error('Error in stopRecording callback:', error);
+            this.cleanup();
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        });
+      } catch (error) {
+        console.error('Error initiating recording stop:', error);
         this.cleanup();
-        this.stopStateSaving();
-        await this.crashRecoveryService.clearRecoveryState();
-        resolve(metadata);
-      });
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -336,7 +403,7 @@ export class AudioService {
       type: 'audio',
       mimeType: this.recordingOptions.format === 'wav' 
         ? 'audio/wav' 
-        : 'audio/mp3',
+        : 'audio/webm',
       recorderType: RecordRTC.StereoAudioRecorder,
       numberOfAudioChannels: 2,
       desiredSampRate: 44100,
@@ -354,13 +421,8 @@ export class AudioService {
           // Check if we need to split based on time or size
           this.checkSplitConditions();
         }
-      },
-      onerror: (error: any) => {
-        console.error('RecordRTC error:', error);
-        this.cleanup();
-        throw new Error('Recording failed: ' + error);
       }
-    });
+    } as RecordRTC.Options);
 
     // Start the new recorder before stopping the old one
     newRecorder.startRecording();
@@ -408,9 +470,9 @@ export class AudioService {
   }
 
   private async saveState(): Promise<void> {
-    if (!this.isRecording) return;
+    if (!this.isRecording || !this.recordingStartTime) return;
 
-    const state = {
+    const state: RecoveryState = {
       sessionName: this.currentSessionName,
       startTime: this.recordingStartTime,
       duration: this.currentDuration,
@@ -418,7 +480,7 @@ export class AudioService {
       currentFileReference: this.currentFileReference,
       metadata: {
         sessionName: this.currentSessionName,
-        startTime: this.recordingStartTime!,
+        startTime: this.recordingStartTime,
         duration: this.currentDuration,
         fileSize: this.currentFileReference?.size || 0,
         format: this.recordingOptions.format,
@@ -444,25 +506,32 @@ export class AudioService {
   }
 
   private cleanup(): void {
-    this.stopTimer();
-    this.stopAudioLevelMonitoring();
-    this.stopStateSaving();
-    
-    if (this.recorder) {
-      this.recorder.stopRecording();
+    try {
+      if (this.recorder) {
+        this.recorder.destroy();
+        this.recorder = null;
+      }
+      if (this.mediaStream) {
+        this.mediaStream.getTracks().forEach(track => track.stop());
+        this.mediaStream = null;
+      }
+      this.stopAudioLevelMonitoring();
+      this.stopTimer();
+      this.stopStateSaving();
+      this.isRecording = false;
+      this.isPaused = false;
+      this.recordingStartTime = null;
+      this.currentDuration = 0;
+      this.currentSessionId = null;
+      this.currentFileReference = null;
+    } catch (error) {
+      console.error('Error during cleanup:', error);
+      // Reset critical state even if cleanup fails
+      this.isRecording = false;
+      this.isPaused = false;
       this.recorder = null;
-    }
-    
-    if (this.mediaStream) {
-      this.mediaStream.getTracks().forEach(track => track.stop());
       this.mediaStream = null;
     }
-    
-    this.isRecording = false;
-    this.isPaused = false;
-    this.currentDuration = 0;
-    this.currentSessionId = null;
-    this.currentFileReference = null;
   }
 
   getCurrentDuration(): number {

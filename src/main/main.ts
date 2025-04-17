@@ -1,10 +1,23 @@
-import { app, BrowserWindow, ipcMain, powerSaveBlocker } from 'electron';
+import { app, BrowserWindow, ipcMain, powerSaveBlocker, dialog, Event as ElectronEvent } from 'electron';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import process from 'process';
 import { TrayManager } from './tray';
 import fs from 'fs/promises';
-import path from 'path';
+import * as path from 'path';
+import { isDevelopment } from './utils';
+
+// Extend the Electron.App interface
+declare module 'electron' {
+  interface App {
+    isQuitting: boolean;
+  }
+}
+
+// App state management
+const appState = {
+  isQuitting: false
+};
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -22,11 +35,9 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       webSecurity: true,
-      preload: join(__dirname, 'preload.js'),
-      permissions: {
-        media: true,
-        audioCapture: true,
-      }
+      preload: isDev 
+        ? join(__dirname, '..', '..', 'dist', 'main', 'preload.js')
+        : join(__dirname, 'preload.js'),
     },
     icon: join(__dirname, '..', '..', 'logo.png')
   });
@@ -45,15 +56,15 @@ function createWindow() {
   trayManager = new TrayManager(mainWindow);
 
   // Handle window close
-  mainWindow.on('close', (event) => {
-    if (!app.isQuitting) {
+  mainWindow?.on('close', async (event: ElectronEvent) => {
+    if (!appState.isQuitting && mainWindow) {
       event.preventDefault();
-      mainWindow?.hide();
+      mainWindow.hide();
     }
   });
 
   // Handle window minimize
-  mainWindow.on('minimize', (event) => {
+  mainWindow.on('minimize', (event: ElectronEvent) => {
     event.preventDefault();
     mainWindow?.hide();
   });
@@ -78,7 +89,7 @@ function createWindow() {
 
 // Handle app quit
 app.on('before-quit', () => {
-  app.isQuitting = true;
+  appState.isQuitting = true;
   if (powerSaveBlockerId !== null) {
     powerSaveBlocker.stop(powerSaveBlockerId);
     powerSaveBlockerId = null;
@@ -114,32 +125,32 @@ app.whenReady().then(() => {
 });
 
 // Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
+process.on('uncaughtException', async (error) => {
   console.error('Uncaught Exception:', error);
-  // If we're recording, try to save the state
-  if (trayManager && trayManager.isRecording) {
-    // Send a message to the renderer to save state
-    if (mainWindow) {
-      mainWindow.webContents.send('save-state-before-crash');
-    }
+
+  if (trayManager && trayManager.recording) {
+    // Send save state event to renderer
+    mainWindow?.webContents.send('save-state-before-crash');
   }
-  // Give the renderer a moment to save state
-  setTimeout(() => {
-    app.quit();
-  }, 1000);
+
+  if (!appState.isQuitting) {
+    dialog.showErrorBox(
+      'Error',
+      'An unexpected error occurred. The application will now close.'
+    );
+  }
+
+  app.quit();
 });
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  // If we're recording, try to save the state
-  if (trayManager && trayManager.isRecording) {
-    // Send a message to the renderer to save state
+  if (trayManager && trayManager.recording) {
     if (mainWindow) {
       mainWindow.webContents.send('save-state-before-crash');
     }
   }
-  // Give the renderer a moment to save state
   setTimeout(() => {
     app.quit();
   }, 1000);
@@ -148,14 +159,11 @@ process.on('unhandledRejection', (reason, promise) => {
 // Handle window crashes
 app.on('render-process-gone', (event, webContents, details) => {
   console.error('Render process crashed:', details);
-  // If we're recording, try to save the state
-  if (trayManager && trayManager.isRecording) {
-    // Send a message to the renderer to save state
+  if (trayManager && trayManager.recording) {
     if (mainWindow) {
       mainWindow.webContents.send('save-state-before-crash');
     }
   }
-  // Give the renderer a moment to save state
   setTimeout(() => {
     app.quit();
   }, 1000);
@@ -193,6 +201,23 @@ ipcMain.handle('delete-file', async (event, filePath) => {
     return { success: true };
   } catch (error) {
     console.error('Error deleting file:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+});
+
+ipcMain.handle('select-directory', async () => {
+  try {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory', 'createDirectory'],
+      title: 'Select Recording Storage Location'
+    });
+    
+    if (!result.canceled && result.filePaths.length > 0) {
+      return { success: true, path: result.filePaths[0] };
+    }
+    return { success: false, error: 'No directory selected' };
+  } catch (error) {
+    console.error('Error selecting directory:', error);
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
   }
 }); 
