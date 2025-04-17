@@ -244,17 +244,17 @@ export class AudioService {
   }
 
   async stopRecording(): Promise<RecordingMetadata> {
-    if (!this.recorder || !this.isRecording) {
-      throw new Error('No active recording to stop');
+    if (!this.isRecording) {
+      throw new Error('No recording in progress');
     }
 
-    return new Promise((resolve) => {
-      this.recorder!.stopRecording(() => {
-        this.stopTimer();
-        this.stopAudioLevelMonitoring();
-        this.isRecording = false;
-        this.isPaused = false;
+    return new Promise((resolve, reject) => {
+      if (!this.recorder) {
+        reject(new Error('Recorder not initialized'));
+        return;
+      }
 
+      this.recorder.stopRecording(async () => {
         const blob = this.recorder!.getBlob();
         const metadata: RecordingMetadata = {
           sessionName: this.currentSessionName,
@@ -265,7 +265,7 @@ export class AudioService {
           quality: this.recordingOptions.quality
         };
 
-        this.saveRecording(blob, metadata);
+        await this.saveRecording(blob, metadata);
         this.cleanup();
         this.stopStateSaving();
         await this.crashRecoveryService.clearRecoveryState();

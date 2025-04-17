@@ -49,7 +49,7 @@
   - [x] Implement time-based file splitting
   - [x] Add size-based file splitting option
 - [x] Add error handling
-  - [ ] Implement crash recovery
+  - [x] Implement crash recovery
   - [x] Add error logging
   - [x] Create user-friendly error messages
 - [x] Optimize for long sessions
