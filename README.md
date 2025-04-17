@@ -168,6 +168,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📞 Contact
 
-Your Name - [@yourtwitter](https://twitter.com/yourtwitter) - email@example.com
+Your Name - [@YourBr0therr](https://twitter.com/yourbr0ther) - YourBr0ther.tv@gmail.com
 
-Project Link: [https://github.com/yourusername/taverntapes](https://github.com/yourusername/taverntapes)
+Project Link: [https://github.com/YourBr0ther/taverntapes](https://github.com/YourBr0ther/taverntapes)
