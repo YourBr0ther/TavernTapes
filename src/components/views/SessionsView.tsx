@@ -112,7 +112,7 @@ const SessionsView: React.FC = () => {
             />
             <button
               onClick={handleSearch}
-              className="px-4 py-2 bg-[#3A1078] hover:bg-[#3A1078]/90 text-white rounded-lg transition-colors duration-200"
+              className="px-4 py-2 bg-[#3A1078] hover:bg-[#3A1078]/90 text-[#FFD700] rounded-lg transition-colors duration-200"
             >
               Search
             </button>
@@ -132,7 +132,7 @@ const SessionsView: React.FC = () => {
             >
               <div className="flex justify-between items-start">
                 <div>
-                  <h3 className="text-lg font-semibold text-white">{session.metadata.sessionName}</h3>
+                  <h3 className="text-lg font-semibold text-[#FFD700]">{session.metadata.sessionName}</h3>
                   <p className="text-sm text-gray-400">
                     {formatDate(session.createdAt)}
                   </p>
@@ -145,7 +145,7 @@ const SessionsView: React.FC = () => {
                     e.stopPropagation();
                     handleDeleteSession(session.id);
                   }}
-                  className="text-red-400 hover:text-red-300 transition-colors duration-200"
+                  className="text-[#F44336] hover:text-[#F44336]/80 transition-colors duration-200"
                 >
                   Delete
                 </button>
@@ -159,11 +159,11 @@ const SessionsView: React.FC = () => {
       {selectedSession && (
         <div className="w-1/2">
           <div className="flex justify-between items-center mb-6">
-            <h2 className="text-2xl font-bold text-white">{selectedSession.metadata.sessionName}</h2>
+            <h2 className="text-2xl font-bold text-[#FFD700]">{selectedSession.metadata.sessionName}</h2>
             <button
               onClick={handleExportSession}
               disabled={isExporting}
-              className={`px-4 py-2 rounded-lg text-white transition-all duration-200 ${
+              className={`px-4 py-2 rounded-lg text-[#FFD700] transition-all duration-200 ${
                 isExporting
                   ? 'bg-gray-600 cursor-not-allowed'
                   : 'bg-[#3A1078] hover:bg-[#3A1078]/90'
@@ -174,14 +174,14 @@ const SessionsView: React.FC = () => {
           </div>
           
           {exportError && (
-            <div className="mb-6 p-4 bg-red-900/50 border border-red-700 rounded-lg text-red-200">
+            <div className="mb-6 p-4 bg-[#1C1C1C] border border-[#F44336]/50 rounded-lg text-red-200">
               {exportError}
             </div>
           )}
 
           <div className="space-y-6">
             <div>
-              <h3 className="text-lg font-semibold mb-3 text-white">Details</h3>
+              <h3 className="text-lg font-semibold mb-3 text-[#FFD700]">Details</h3>
               <div className="bg-[#1C1C1C] p-4 rounded-lg border border-[#3A1078]/20">
                 <div className="space-y-2 text-gray-300">
                   <p>Created: {formatDate(selectedSession.createdAt)}</p>
@@ -194,7 +194,7 @@ const SessionsView: React.FC = () => {
             </div>
 
             <div>
-              <h3 className="text-lg font-semibold mb-3 text-white">Notes</h3>
+              <h3 className="text-lg font-semibold mb-3 text-[#FFD700]">Notes</h3>
               {isEditing ? (
                 <div className="space-y-3">
                   <textarea
@@ -234,18 +234,18 @@ const SessionsView: React.FC = () => {
             </div>
 
             <div>
-              <h3 className="text-lg font-semibold mb-3 text-white">Tags</h3>
+              <h3 className="text-lg font-semibold mb-3 text-[#FFD700]">Tags</h3>
               <div className="bg-[#1C1C1C] p-4 rounded-lg border border-[#3A1078]/20">
                 <div className="flex flex-wrap gap-2 mb-4">
                   {selectedSession.tags?.map(tag => (
                     <span
                       key={tag}
-                      className="px-3 py-1 bg-[#3A1078] rounded-full text-sm text-white flex items-center gap-1"
+                      className="px-3 py-1 bg-[#3A1078] rounded-full text-sm text-[#FFD700] flex items-center gap-1"
                     >
                       {tag}
                       <button
                         onClick={() => handleRemoveTag(tag)}
-                        className="text-xs hover:text-red-400 transition-colors duration-200"
+                        className="text-xs hover:text-[#F44336] transition-colors duration-200"
                       >
                         ×
                       </button>
@@ -263,7 +263,7 @@ const SessionsView: React.FC = () => {
                   />
                   <button
                     onClick={handleAddTag}
-                    className="px-4 py-2 bg-[#3A1078] hover:bg-[#3A1078]/90 text-white rounded-lg transition-colors duration-200"
+                    className="px-4 py-2 bg-[#3A1078] hover:bg-[#3A1078]/90 text-[#FFD700] rounded-lg transition-colors duration-200"
                   >
                     Add
                   </button>

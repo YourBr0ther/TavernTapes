@@ -1,5 +1,6 @@
 import RecordRTC from 'recordrtc';
 import sessionService from './SessionService';
+import { CrashRecoveryService } from './CrashRecoveryService';
 
 export interface RecordingOptions {
   format: 'wav' | 'mp3';
@@ -38,9 +39,12 @@ export class AudioService {
   private maxChunks: number = 100; // Maximum number of chunks to keep in memory
   private chunkSize: number = 1024 * 1024; // 1MB chunks
   private lastSplitTime: number = 0;
+  private crashRecoveryService: CrashRecoveryService;
+  private stateSaveInterval: NodeJS.Timeout | null = null;
 
   constructor(options: RecordingOptions) {
     this.recordingOptions = options;
+    this.crashRecoveryService = new CrashRecoveryService();
   }
 
   // Add method to get available input devices
@@ -56,6 +60,27 @@ export class AudioService {
 
   async startRecording(sessionName: string = ''): Promise<void> {
     try {
+      // Check for recovery state first
+      const recoveryState = await this.crashRecoveryService.getRecoveryState();
+      if (recoveryState) {
+        // If we have recovery state, ask the user if they want to recover
+        const shouldRecover = window.confirm(
+          'A previous recording session was interrupted. Would you like to recover it?'
+        );
+        
+        if (shouldRecover) {
+          // Restore the recording state
+          this.currentSessionName = recoveryState.sessionName;
+          this.recordingStartTime = recoveryState.startTime;
+          this.currentDuration = recoveryState.duration;
+          this.isPaused = recoveryState.isPaused;
+          this.audioChunks = recoveryState.audioChunks.map(chunk => new Blob([chunk]));
+          
+          // Clear the recovery state
+          await this.crashRecoveryService.clearRecoveryState();
+        }
+      }
+
       // Check if recording is already in progress
       if (this.isRecording) {
         throw new Error('Recording is already in progress');
@@ -141,6 +166,7 @@ export class AudioService {
       await this.recorder.startRecording();
       this.startTimer();
 
+      this.startStateSaving();
     } catch (error) {
       this.cleanup();
       if (error instanceof Error) {
@@ -233,6 +259,8 @@ export class AudioService {
 
         this.saveRecording(blob, metadata);
         this.cleanup();
+        this.stopStateSaving();
+        await this.crashRecoveryService.clearRecoveryState();
         resolve(metadata);
       });
     });
@@ -374,6 +402,46 @@ export class AudioService {
     });
   }
 
+  private async saveState(): Promise<void> {
+    if (!this.isRecording || !this.recorder) return;
+
+    try {
+      const state = {
+        sessionName: this.currentSessionName,
+        startTime: this.recordingStartTime!,
+        duration: this.currentDuration,
+        isPaused: this.isPaused,
+        audioChunks: this.audioChunks.map(chunk => chunk.toString()),
+        metadata: {
+          sessionName: this.currentSessionName,
+          startTime: this.recordingStartTime!,
+          duration: this.currentDuration,
+          fileSize: this.audioChunks.reduce((acc, chunk) => acc + chunk.size, 0),
+          format: this.recordingOptions.format,
+          quality: this.recordingOptions.quality
+        }
+      };
+
+      await this.crashRecoveryService.saveState(state);
+    } catch (error) {
+      console.error('Error saving state:', error);
+    }
+  }
+
+  private startStateSaving(): void {
+    // Save state every 30 seconds
+    this.stateSaveInterval = setInterval(() => {
+      this.saveState();
+    }, 30000);
+  }
+
+  private stopStateSaving(): void {
+    if (this.stateSaveInterval) {
+      clearInterval(this.stateSaveInterval);
+      this.stateSaveInterval = null;
+    }
+  }
+
   private cleanup(): void {
     if (this.recorder) {
       this.recorder.destroy();
@@ -396,6 +464,7 @@ export class AudioService {
     this.currentSessionName = '';
     this.currentDuration = 0;
     this.lastSplitTime = 0;
+    this.stopStateSaving();
   }
 
   getCurrentDuration(): number {
@@ -408,5 +477,21 @@ export class AudioService {
 
   isCurrentlyPaused(): boolean {
     return this.isPaused;
+  }
+
+  // For testing purposes only
+  async simulateCrash(): Promise<void> {
+    if (!this.isRecording) {
+      throw new Error('No active recording to simulate crash for');
+    }
+
+    try {
+      console.log('Simulating crash and saving state...');
+      await this.saveState();
+      console.log('State saved successfully');
+    } catch (error) {
+      console.error('Error simulating crash:', error);
+      throw error;
+    }
   }
 } 

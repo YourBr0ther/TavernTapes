@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { AudioService, RecordingOptions } from '../../services/AudioService';
 import { formatTime } from '../../utils/timeUtils';
+import RecoveryDialog from '../dialogs/RecoveryDialog';
 
 interface RecordingViewProps {
   onRecordingComplete: (metadata: any) => void;
@@ -22,11 +23,39 @@ const RecordingView: React.FC<RecordingViewProps> = ({ onRecordingComplete, sett
   const noAudioTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastAudioTimeRef = useRef<number>(0);
   const audioLevelHistoryRef = useRef<number[]>([]);
+  const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
+  const [recoveryState, setRecoveryState] = useState<any>(null);
 
   useEffect(() => {
     // Initialize audio service with provided settings
     audioServiceRef.current = new AudioService(settings);
     audioServiceRef.current.setAudioLevelCallback(setAudioLevel);
+
+    // Handle crash recovery messages
+    if (window.electron) {
+      window.electron.ipcRenderer.on('save-state-before-crash', () => {
+        console.log('Received save-state-before-crash message');
+        if (audioServiceRef.current?.isCurrentlyRecording()) {
+          console.log('Attempting to save state before crash');
+          audioServiceRef.current.saveState();
+        }
+      });
+    }
+
+    // Check for recovery state on mount
+    const checkRecoveryState = async () => {
+      try {
+        const state = await audioServiceRef.current?.getRecoveryState();
+        if (state) {
+          console.log('Found recovery state:', state);
+          setRecoveryState(state);
+          setShowRecoveryDialog(true);
+        }
+      } catch (error) {
+        console.error('Error checking recovery state:', error);
+      }
+    };
+    checkRecoveryState();
 
     // Cleanup on unmount
     return () => {
@@ -35,6 +64,9 @@ const RecordingView: React.FC<RecordingViewProps> = ({ onRecordingComplete, sett
       }
       if (noAudioTimeoutRef.current) {
         clearTimeout(noAudioTimeoutRef.current);
+      }
+      if (window.electron) {
+        window.electron.ipcRenderer.removeAllListeners('save-state-before-crash');
       }
     };
   }, [settings]);
@@ -66,25 +98,36 @@ const RecordingView: React.FC<RecordingViewProps> = ({ onRecordingComplete, sett
     // Clear the canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Set up the visualization style
-    ctx.fillStyle = '#4CAF50'; // Green color for the visualization
-    ctx.strokeStyle = '#2E7D32'; // Darker green for the border
+    // Set up the visualization style with fantasy-inspired colors
+    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    gradient.addColorStop(0, '#3A1078'); // Deep purple
+    gradient.addColorStop(0.5, '#FFD700'); // Gold
+    gradient.addColorStop(1, '#3A1078'); // Deep purple
+
+    ctx.fillStyle = gradient;
+    ctx.strokeStyle = '#FFD700'; // Gold border
     ctx.lineWidth = 2;
 
-    // Draw the audio level bar
+    // Draw the audio level bar with a fantasy-inspired shape
     const barWidth = canvas.width;
     const barHeight = canvas.height * audioLevel;
     const y = canvas.height - barHeight;
 
+    // Add a subtle pattern to the bar
     ctx.fillRect(0, y, barWidth, barHeight);
     ctx.strokeRect(0, y, barWidth, barHeight);
 
-    // Add a subtle gradient effect
-    const gradient = ctx.createLinearGradient(0, y, 0, canvas.height);
-    gradient.addColorStop(0, 'rgba(76, 175, 80, 0.8)');
-    gradient.addColorStop(1, 'rgba(76, 175, 80, 0.2)');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, y, barWidth, barHeight);
+    // Add decorative elements
+    const patternSize = 20;
+    for (let i = 0; i < barWidth; i += patternSize) {
+      ctx.beginPath();
+      ctx.moveTo(i, y);
+      ctx.lineTo(i + patternSize/2, y + patternSize/2);
+      ctx.lineTo(i + patternSize, y);
+      ctx.strokeStyle = '#FFD700';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
   }, [audioLevel]);
 
   useEffect(() => {
@@ -199,19 +242,53 @@ const RecordingView: React.FC<RecordingViewProps> = ({ onRecordingComplete, sett
     }
   };
 
+  const handleRecover = async () => {
+    try {
+      console.log('Attempting to recover recording');
+      if (recoveryState) {
+        await audioServiceRef.current?.startRecording(recoveryState.sessionName);
+        setShowRecoveryDialog(false);
+        setRecoveryState(null);
+      }
+    } catch (error) {
+      console.error('Error recovering recording:', error);
+      setError('Failed to recover recording');
+    }
+  };
+
+  const handleDiscard = async () => {
+    try {
+      console.log('Discarding recovery state');
+      await audioServiceRef.current?.clearRecoveryState();
+      setShowRecoveryDialog(false);
+      setRecoveryState(null);
+    } catch (error) {
+      console.error('Error discarding recovery state:', error);
+      setError('Failed to discard recovery state');
+    }
+  };
+
   return (
     <div className="flex flex-col items-center justify-center min-h-[calc(100vh-8rem)] p-6">
+      {showRecoveryDialog && recoveryState && (
+        <RecoveryDialog
+          sessionName={recoveryState.sessionName}
+          duration={recoveryState.duration}
+          onRecover={handleRecover}
+          onDiscard={handleDiscard}
+        />
+      )}
       <div className="w-full max-w-2xl space-y-8">
         {/* Error Message */}
         {error && (
-          <div className="p-4 bg-[#1C1C1C] border border-red-700/50 rounded-lg text-red-200">
+          <div className="p-4 bg-[#1C1C1C] border border-[#F44336]/50 rounded-lg text-red-200">
             {error}
           </div>
         )}
 
         {/* No Audio Warning */}
         {noAudioWarning && (
-          <div className="p-4 bg-[#1C1C1C] border border-amber-700/50 rounded-lg text-amber-200">
+          <div className="p-4 bg-[#1C1C1C] border border-[#FFC107]/50 rounded-lg text-amber-200">
             Warning: No audio input detected for the last 5 seconds. Please check your microphone connection and settings.
           </div>
         )}
@@ -229,7 +306,7 @@ const RecordingView: React.FC<RecordingViewProps> = ({ onRecordingComplete, sett
         </div>
 
         {/* Timer Display */}
-        <div className="text-4xl font-mono mb-8 text-white">
+        <div className="text-4xl font-mono mb-8 text-[#FFD700]">
           {formatTime(duration)}
         </div>
 
@@ -239,7 +316,7 @@ const RecordingView: React.FC<RecordingViewProps> = ({ onRecordingComplete, sett
             <button
               onClick={startRecording}
               disabled={isLoading}
-              className="px-6 py-3 bg-[#3A1078] hover:bg-[#3A1078]/90 rounded-lg text-white font-bold transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-6 py-3 bg-[#3A1078] hover:bg-[#3A1078]/90 rounded-lg text-[#FFD700] font-bold transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isLoading ? 'Starting...' : 'Start Recording'}
             </button>
@@ -257,7 +334,7 @@ const RecordingView: React.FC<RecordingViewProps> = ({ onRecordingComplete, sett
                 <button
                   onClick={pauseRecording}
                   disabled={isLoading}
-                  className="px-6 py-3 bg-[#FFC107] hover:bg-[#FFC107]/90 rounded-lg text-white font-bold transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-6 py-3 bg-[#FFC107] hover:bg-[#FFC107]/90 rounded-lg text-[#1C1C1C] font-bold transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Pause
                 </button>
@@ -282,12 +359,12 @@ const RecordingView: React.FC<RecordingViewProps> = ({ onRecordingComplete, sett
             />
             {/* Audio level indicator lines */}
             <div className="absolute inset-0 pointer-events-none">
-              <div className="absolute top-1/4 left-0 right-0 h-px bg-[#3A1078]/30"></div>
-              <div className="absolute top-1/2 left-0 right-0 h-px bg-[#3A1078]/30"></div>
-              <div className="absolute top-3/4 left-0 right-0 h-px bg-[#3A1078]/30"></div>
+              <div className="absolute top-1/4 left-0 right-0 h-px bg-[#FFD700]/30"></div>
+              <div className="absolute top-1/2 left-0 right-0 h-px bg-[#FFD700]/30"></div>
+              <div className="absolute top-3/4 left-0 right-0 h-px bg-[#FFD700]/30"></div>
             </div>
           </div>
-          <div className="mt-2 text-sm text-gray-400 text-center">
+          <div className="mt-2 text-sm text-[#FFD700]/80 text-center">
             {isRecording ? 'Audio Level' : 'Ready to Record'}
           </div>
         </div>

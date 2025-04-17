@@ -42,9 +42,9 @@
   - [x] Add appearance settings
 
 ## Technical Features
-- [ ] Implement background recording
-  - [ ] Ensure recording continues when app is minimized
-  - [ ] Add notification for active recording status
+- [x] Implement background recording
+  - [x] Ensure recording continues when app is minimized
+  - [x] Add notification for active recording status
 - [x] Create automatic file splitting
   - [x] Implement time-based file splitting
   - [x] Add size-based file splitting option
@@ -52,10 +52,10 @@
   - [ ] Implement crash recovery
   - [x] Add error logging
   - [x] Create user-friendly error messages
-- [ ] Optimize for long sessions
-  - [ ] Implement memory management
-  - [ ] Add battery optimization (if applicable)
-  - [ ] Test with extended recording sessions
+- [x] Optimize for long sessions
+  - [x] Implement memory management
+  - [x] Add battery optimization (if applicable)
+  - [x] Test with extended recording sessions
 
 ## Testing
 - [ ] Create unit tests for core functionality

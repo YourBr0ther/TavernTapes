@@ -103,25 +103,25 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onSettingsChange }) => {
       <div className="w-full max-w-2xl space-y-8">
         {/* Error Message */}
         {error && (
-          <div className="p-4 bg-[#1C1C1C] border border-red-700/50 rounded-lg text-red-200">
+          <div className="p-4 bg-[#1C1C1C] border border-[#F44336]/50 rounded-lg text-red-200">
             {error}
           </div>
         )}
 
         {/* Success Message */}
         {success && (
-          <div className="p-4 bg-[#1C1C1C] border border-green-700/50 rounded-lg text-green-200">
+          <div className="p-4 bg-[#1C1C1C] border border-[#4CAF50]/50 rounded-lg text-green-200">
             {success}
           </div>
         )}
 
         {/* Audio Settings Section */}
         <div className="bg-[#1C1C1C] rounded-lg p-6 border border-[#3A1078]/20">
-          <h2 className="text-xl font-bold mb-4 text-white">Audio Settings</h2>
+          <h2 className="text-xl font-bold mb-4 text-[#FFD700]">Audio Settings</h2>
           
           {/* Input Device Selection */}
           <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-300 mb-2">
+            <label className="block text-sm font-medium text-[#FFD700]/80 mb-2">
               Input Device
             </label>
             <select
@@ -140,7 +140,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onSettingsChange }) => {
 
           {/* Audio Format Selection */}
           <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-300 mb-2">
+            <label className="block text-sm font-medium text-[#FFD700]/80 mb-2">
               Audio Format
             </label>
             <select
@@ -155,7 +155,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onSettingsChange }) => {
 
           {/* Quality Settings */}
           <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-300 mb-2">
+            <label className="block text-sm font-medium text-[#FFD700]/80 mb-2">
               Quality (kbps)
             </label>
             <input
@@ -171,7 +171,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onSettingsChange }) => {
 
           {/* File Splitting Settings */}
           <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-300 mb-2">
+            <label className="block text-sm font-medium text-[#FFD700]/80 mb-2">
               Split Recording Every (minutes)
             </label>
             <input
@@ -188,7 +188,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onSettingsChange }) => {
           <button
             onClick={handleSave}
             disabled={isLoading}
-            className="w-full px-4 py-2 bg-[#3A1078] hover:bg-[#3A1078]/90 rounded-lg text-white font-bold transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full px-4 py-2 bg-[#3A1078] hover:bg-[#3A1078]/90 rounded-lg text-[#FFD700] font-bold transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isLoading ? 'Saving...' : 'Save Settings'}
           </button>
@@ -196,11 +196,11 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onSettingsChange }) => {
 
         {/* Storage Settings Section */}
         <div className="bg-[#1C1C1C] rounded-lg p-6 border border-[#3A1078]/20">
-          <h2 className="text-xl font-bold mb-4 text-white">Storage Settings</h2>
+          <h2 className="text-xl font-bold mb-4 text-[#FFD700]">Storage Settings</h2>
           
           {/* Storage Location */}
           <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-300 mb-2">
+            <label className="block text-sm font-medium text-[#FFD700]/80 mb-2">
               Storage Location
             </label>
             <div className="flex items-center space-x-4">
@@ -213,13 +213,12 @@ const SettingsView: React.FC<SettingsViewProps> = ({ onSettingsChange }) => {
               <button
                 onClick={handleStorageLocationChange}
                 disabled={isLoading}
-                className="px-4 py-2 bg-[#3A1078] hover:bg-[#3A1078]/90 rounded-lg text-white font-bold transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 bg-[#3A1078] hover:bg-[#3A1078]/90 rounded-lg text-[#FFD700] font-bold transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isLoading ? 'Changing...' : 'Change'}
               </button>
             </div>
           </div>
-
         </div>
       </div>
     </div>

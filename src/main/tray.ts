@@ -1,4 +1,4 @@
-import { Tray, Menu, nativeImage, app } from 'electron';
+import { Tray, Menu, nativeImage, app, Notification } from 'electron';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -10,6 +10,8 @@ export class TrayManager {
   private tray: Tray | null = null;
   private mainWindow: Electron.BrowserWindow;
   private isRecording: boolean = false;
+  private lastNotificationTime: number = 0;
+  private notificationCooldown: number = 30000; // 30 seconds between notifications
 
   constructor(mainWindow: Electron.BrowserWindow) {
     this.mainWindow = mainWindow;
@@ -32,6 +34,26 @@ export class TrayManager {
     this.tray.on('click', () => {
       this.mainWindow.show();
     });
+
+    // Handle double click
+    this.tray.on('double-click', () => {
+      this.mainWindow.show();
+    });
+  }
+
+  private showNotification(title: string, body: string) {
+    const now = Date.now();
+    if (now - this.lastNotificationTime < this.notificationCooldown) {
+      return; // Skip if within cooldown period
+    }
+
+    new Notification({
+      title: title,
+      body: body,
+      icon: join(__dirname, '..', 'public', 'logo.png')
+    }).show();
+
+    this.lastNotificationTime = now;
   }
 
   public updateContextMenu() {
@@ -53,6 +75,13 @@ export class TrayManager {
       {
         label: 'Quit',
         click: () => {
+          if (this.isRecording) {
+            // Show warning before quitting during recording
+            this.showNotification(
+              'Recording in Progress',
+              'Are you sure you want to quit? This will stop the current recording.'
+            );
+          }
           app.quit();
         }
       }
@@ -62,7 +91,23 @@ export class TrayManager {
   }
 
   public setRecordingStatus(isRecording: boolean) {
+    const wasRecording = this.isRecording;
     this.isRecording = isRecording;
+    
+    // Update tray icon and menu
     this.updateContextMenu();
+    
+    // Show notification for state changes
+    if (isRecording && !wasRecording) {
+      this.showNotification(
+        'Recording Started',
+        'TavernTapes is now recording in the background'
+      );
+    } else if (!isRecording && wasRecording) {
+      this.showNotification(
+        'Recording Stopped',
+        'TavernTapes has stopped recording'
+      );
+    }
   }
 } 

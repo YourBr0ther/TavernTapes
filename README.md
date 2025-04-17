@@ -1,6 +1,6 @@
 # TavernTapes
 
-![TavernTapes Logo](logo.png)
+<img src="logo.png" alt="TavernTapes Logo" width="50%" />
 
 > A modern, clean recording application designed specifically for Dungeons & Dragons sessions.
 
@@ -14,6 +14,10 @@ TavernTapes is the perfect companion for your D&D adventures, allowing you to re
 - **Optimized Audio** - High-quality recording suitable for AI processing
 - **Modern Interface** - Clean, intuitive design with subtle fantasy elements
 - **File Management** - Automatic file splitting and organization
+- **Crash Recovery** - Automatic recovery of interrupted recordings
+- **Background Recording** - Continue recording when minimized
+- **System Tray Integration** - Quick access to recording controls
+- **Power Management** - Prevents system sleep during recording
 
 ## 🚀 Getting Started
 
@@ -21,6 +25,7 @@ TavernTapes is the perfect companion for your D&D adventures, allowing you to re
 
 - Node.js (v16.0.0 or later)
 - npm or yarn
+- Git
 
 ### Installation
 
@@ -68,14 +73,17 @@ yarn build
 - Access your recorded sessions from the main screen
 - Play, rename, delete, or export sessions as needed
 - Add notes to sessions for future reference
+- Tag sessions for better organization
+- Search through your session history
 
 ### Settings
 
 Access the settings panel to customize:
-- Audio quality and format
+- Audio quality and format (WAV/MP3)
 - Default save location
 - File splitting preferences
 - Interface theme options
+- Input device selection
 
 ## 🏗️ Project Structure
 
@@ -83,35 +91,58 @@ Access the settings panel to customize:
 taverntapes/
 ├── src/                  # Source files
 │   ├── components/       # UI components
-│   ├── services/         # Core functionality services
-│   ├── assets/           # Images, icons, and other static assets
-│   ├── utils/            # Utility functions
-│   └── main.js           # Application entry point
-├── public/               # Public static files
-├── build/                # Build output directory
-├── docs/                 # Documentation
-│   ├── PLANNING.md       # Project planning document
-│   ├── TASKS.md          # Development task list
-│   └── DESIGN.md         # UI/UX design document
-└── README.md             # This file
+│   │   ├── dialogs/     # Dialog components
+│   │   ├── layout/      # Layout components
+│   │   └── views/       # Main view components
+│   ├── services/        # Core functionality services
+│   ├── assets/          # Images, icons, and other static assets
+│   ├── main/            # Electron main process files
+│   └── utils/           # Utility functions
+├── public/              # Public static files
+├── build/               # Build output directory
+├── docs/                # Documentation
+│   ├── PLANNING.md      # Project planning document
+│   ├── TASKS.md         # Development task list
+│   └── DESIGN.md        # UI/UX design document
+└── README.md            # This file
 ```
 
 ## 🧩 Technology Stack
 
 - **Electron.js** - Cross-platform desktop application framework
 - **React** - UI component library
+- **TypeScript** - Type-safe JavaScript
 - **Web Audio API** - Audio recording and processing
+- **RecordRTC** - Audio recording library
 - **Tailwind CSS** - Styling
+- **Vite** - Build tool and development server
 
-## 🗺️ Roadmap
+## 🗺️ Development Status
 
-- [x] Basic recording functionality
-- [x] Session management
-- [ ] Enhanced audio processing
-- [ ] Mobile application version
-- [ ] Cloud backup integration
-- [ ] Direct OpenAI integration
-- [ ] Multi-track recording support
+### Completed Features ✅
+- Basic recording functionality
+- Session management
+- Crash recovery system
+- Background recording
+- System tray integration
+- File splitting
+- Audio quality settings
+- Session metadata
+- Notes and tags
+- Search functionality
+
+### In Progress 🚧
+- Enhanced audio processing
+- Performance optimization
+- Testing framework setup
+- Documentation completion
+
+### Planned Features 📋
+- Mobile application version
+- Cloud backup integration
+- Direct OpenAI integration
+- Multi-track recording support
+- Custom audio processing filters
 
 ## 🤝 Contributing
 
@@ -122,6 +153,14 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 3. Commit your changes (`git commit -m 'Add some amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
+
+### Development Guidelines
+- Follow the existing code style and patterns
+- Write tests for new features
+- Update documentation as needed
+- Keep components focused and under 300 lines
+- Use TypeScript for type safety
+- Follow the design system in DESIGN.md
 
 ## 📄 License
 
