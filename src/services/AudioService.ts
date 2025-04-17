@@ -1,10 +1,12 @@
 import RecordRTC from 'recordrtc';
+import sessionService from './SessionService';
 
 export interface RecordingOptions {
   format: 'wav' | 'mp3';
   quality: number;
   splitInterval?: number; // in minutes
   splitSize?: number; // in MB
+  inputDeviceId?: string; // Add input device ID option
 }
 
 export interface RecordingMetadata {
@@ -33,30 +35,63 @@ export class AudioService {
   private audioLevelCallback: AudioLevelCallback | null = null;
   private animationFrameId: number | null = null;
   private mediaStream: MediaStream | null = null;
+  private maxChunks: number = 100; // Maximum number of chunks to keep in memory
+  private chunkSize: number = 1024 * 1024; // 1MB chunks
+  private lastSplitTime: number = 0;
 
   constructor(options: RecordingOptions) {
     this.recordingOptions = options;
   }
 
+  // Add method to get available input devices
+  static async getInputDevices(): Promise<MediaDeviceInfo[]> {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return devices.filter(device => device.kind === 'audioinput');
+    } catch (error) {
+      console.error('Error getting input devices:', error);
+      return [];
+    }
+  }
+
   async startRecording(sessionName: string = ''): Promise<void> {
     try {
+      // Check if recording is already in progress
+      if (this.isRecording) {
+        throw new Error('Recording is already in progress');
+      }
+
+      // Request permissions first
+      const permissionResult = await navigator.mediaDevices.getUserMedia({ audio: true });
+      permissionResult.getTracks().forEach(track => track.stop()); // Stop the test stream
+
+      // Now get the actual recording stream with settings
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
+          deviceId: this.recordingOptions.inputDeviceId ? { exact: this.recordingOptions.inputDeviceId } : undefined,
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true
+          autoGainControl: true,
+          channelCount: 2,
+          sampleRate: 44100
         }
       });
 
       this.mediaStream = stream;
+      this.lastSplitTime = Date.now();
 
       // Set up audio analysis
-      this.audioContext = new AudioContext();
-      const source = this.audioContext.createMediaStreamSource(stream);
-      this.analyser = this.audioContext.createAnalyser();
-      this.analyser.fftSize = 256;
-      source.connect(this.analyser);
-      this.startAudioLevelMonitoring();
+      try {
+        this.audioContext = new AudioContext();
+        const source = this.audioContext.createMediaStreamSource(stream);
+        this.analyser = this.audioContext.createAnalyser();
+        this.analyser.fftSize = 256;
+        source.connect(this.analyser);
+        this.startAudioLevelMonitoring();
+      } catch (error) {
+        console.error('Audio analysis setup failed:', error);
+        // Continue with recording even if visualization fails
+      }
 
       const options = {
         type: 'audio',
@@ -66,30 +101,57 @@ export class AudioService {
         recorderType: RecordRTC.StereoAudioRecorder,
         numberOfAudioChannels: 2,
         desiredSampRate: 44100,
-        bitrate: this.recordingOptions.quality * 1000
+        bitrate: this.recordingOptions.quality * 1000,
+        timeSlice: 1000, // Get data every second
+        ondataavailable: (blob: Blob) => {
+          if (this.isRecording && !this.isPaused) {
+            this.audioChunks.push(blob);
+            
+            // Check if we need to split based on memory management
+            if (this.audioChunks.length >= this.maxChunks) {
+              this.splitRecording();
+            }
+            
+            // Check if we need to split based on time or size
+            this.checkSplitConditions();
+          }
+        },
+        onerror: (error: any) => {
+          console.error('RecordRTC error:', error);
+          this.cleanup();
+          throw new Error('Recording failed: ' + error);
+        }
       };
 
       this.recorder = new RecordRTC(stream, options);
-      this.audioChunks = [];
-      this.currentSessionName = sessionName || `Session_${new Date().toISOString()}`;
+      
+      // Format the date and time for the default session name
+      const date = new Date();
+      const formattedDate = date.toISOString().split('T')[0];
+      const hours = date.getHours().toString().padStart(2, '0');
+      const minutes = date.getMinutes().toString().padStart(2, '0');
+      const formattedTime = `${hours}${minutes}`;
+      
+      this.currentSessionName = sessionName || `Session_${formattedDate}_${formattedTime}`;
       this.recordingStartTime = new Date();
       this.isRecording = true;
       this.isPaused = false;
       this.currentDuration = 0;
 
-      this.recorder.startRecording();
+      await this.recorder.startRecording();
       this.startTimer();
 
-      // Set up data collection for file splitting
-      setInterval(() => {
-        if (this.isRecording && !this.isPaused) {
-          this.recorder?.getInternalRecorder().requestData();
-          this.checkSplitConditions();
-        }
-      }, 1000);
-
     } catch (error) {
-      console.error('Error starting recording:', error);
+      this.cleanup();
+      if (error instanceof Error) {
+        if (error.name === 'NotAllowedError') {
+          throw new Error('Microphone access was denied. Please grant permission to record audio.');
+        } else if (error.name === 'NotFoundError') {
+          throw new Error('No microphone found. Please connect a microphone and try again.');
+        } else {
+          throw new Error(`Failed to start recording: ${error.message}`);
+        }
+      }
       throw error;
     }
   }
@@ -194,21 +256,35 @@ export class AudioService {
       return;
     }
 
+    const currentTime = Date.now();
+    const timeSinceLastSplit = (currentTime - this.lastSplitTime) / 1000 / 60; // in minutes
     const blob = this.recorder!.getBlob();
     const currentSizeMB = blob.size / (1024 * 1024);
-    const currentDurationMinutes = this.currentDuration / 60;
 
-    if ((this.recordingOptions.splitInterval && currentDurationMinutes >= this.recordingOptions.splitInterval) ||
+    if ((this.recordingOptions.splitInterval && timeSinceLastSplit >= this.recordingOptions.splitInterval) ||
         (this.recordingOptions.splitSize && currentSizeMB >= this.recordingOptions.splitSize)) {
       this.splitRecording();
+      this.lastSplitTime = currentTime;
     }
   }
 
   private splitRecording(): void {
+    // Get the current recording data
     const blob = this.recorder!.getBlob();
     
+    // Format the date for the filename
+    const date = new Date();
+    const formattedDate = date.toISOString().split('T')[0];
+    const hours = date.getHours().toString().padStart(2, '0');
+    const minutes = date.getMinutes().toString().padStart(2, '0');
+    const formattedTime = `${hours}${minutes}`;
+    
+    // Get the part number with leading zeros
+    const partNumber = Math.floor(this.currentDuration / (this.recordingOptions.splitInterval! * 60)) + 1;
+    const formattedPartNumber = partNumber.toString().padStart(3, '0');
+    
     const metadata: RecordingMetadata = {
-      sessionName: `${this.currentSessionName}_part${Math.floor(this.currentDuration / (this.recordingOptions.splitInterval! * 60)) + 1}`,
+      sessionName: `${this.currentSessionName}_${formattedDate}_${formattedTime}_part${formattedPartNumber}`,
       startTime: this.recordingStartTime!,
       duration: this.currentDuration,
       fileSize: blob.size,
@@ -216,21 +292,86 @@ export class AudioService {
       quality: this.recordingOptions.quality
     };
 
+    // Save the current recording
     this.saveRecording(blob, metadata);
     
-    // Reset the recorder to start a new segment
-    this.recorder!.reset();
-    this.recorder!.startRecording();
+    // Create a new recorder with the same settings
+    const newRecorder = new RecordRTC(this.mediaStream!, {
+      type: 'audio',
+      mimeType: this.recordingOptions.format === 'wav' 
+        ? 'audio/wav' 
+        : 'audio/mp3',
+      recorderType: RecordRTC.StereoAudioRecorder,
+      numberOfAudioChannels: 2,
+      desiredSampRate: 44100,
+      bitrate: this.recordingOptions.quality * 1000,
+      timeSlice: 1000,
+      ondataavailable: (blob: Blob) => {
+        if (this.isRecording && !this.isPaused) {
+          this.audioChunks.push(blob);
+          
+          // Check if we need to split based on memory management
+          if (this.audioChunks.length >= this.maxChunks) {
+            this.splitRecording();
+          }
+          
+          // Check if we need to split based on time or size
+          this.checkSplitConditions();
+        }
+      },
+      onerror: (error: any) => {
+        console.error('RecordRTC error:', error);
+        this.cleanup();
+        throw new Error('Recording failed: ' + error);
+      }
+    });
+
+    // Start the new recorder before stopping the old one
+    newRecorder.startRecording();
+    
+    // Stop and destroy the old recorder
+    this.recorder!.stopRecording(() => {
+      this.recorder!.destroy();
+      this.recorder = newRecorder;
+      this.audioChunks = [];
+    });
   }
 
-  private saveRecording(blob: Blob, metadata: RecordingMetadata): void {
-    // TODO: Implement proper file saving with metadata
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${metadata.sessionName}.${metadata.format}`;
-    a.click();
-    URL.revokeObjectURL(url);
+  private async saveRecording(blob: Blob, metadata: RecordingMetadata): Promise<void> {
+    // Convert blob to base64 for storage
+    const reader = new FileReader();
+    reader.readAsDataURL(blob);
+    
+    await new Promise<void>((resolve) => {
+      reader.onloadend = () => {
+        const base64data = reader.result as string;
+        const base64Content = base64data.split(',')[1];
+        
+        // Get existing recordings
+        const recordings = JSON.parse(localStorage.getItem('tavernTapes_recordings') || '{}');
+        
+        // Create or update session recordings
+        const sessionId = metadata.sessionName;
+        if (!recordings[sessionId]) {
+          recordings[sessionId] = [];
+        }
+        
+        // Add new recording
+        recordings[sessionId].push({
+          data: base64Content,
+          mimeType: blob.type,
+          timestamp: new Date().toISOString()
+        });
+        
+        // Save back to storage
+        localStorage.setItem('tavernTapes_recordings', JSON.stringify(recordings));
+        
+        // Add to session service
+        sessionService.addSession(metadata);
+        
+        resolve();
+      };
+    });
   }
 
   private cleanup(): void {
@@ -242,11 +383,19 @@ export class AudioService {
       this.mediaStream.getTracks().forEach(track => track.stop());
       this.mediaStream = null;
     }
+    if (this.audioContext) {
+      this.audioContext.close();
+      this.audioContext = null;
+    }
+    if (this.animationFrameId) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
     this.audioChunks = [];
     this.recordingStartTime = null;
     this.currentSessionName = '';
     this.currentDuration = 0;
-    this.stopAudioLevelMonitoring();
+    this.lastSplitTime = 0;
   }
 
   getCurrentDuration(): number {
