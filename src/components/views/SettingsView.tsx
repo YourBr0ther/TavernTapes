@@ -1,8 +1,22 @@
 import React, { useEffect, useState } from 'react';
-import settingsService from '../../services/SettingsService';
+import settingsService, { defaultSettings } from '../../services/SettingsService';
 import { Settings } from '../../services/SettingsService';
 import { RecordingOptions, AudioService } from '../../services/AudioService';
 import fileSystemService from '../../services/FileSystemService';
+
+// Extend Window interface to include our electron API
+declare global {
+  interface Window {
+    electron: {
+      ipcRenderer: {
+        invoke: (channel: string, data?: any) => Promise<any>;
+        on: (channel: string, func: (...args: any[]) => void) => void;
+        send: (channel: string, data?: any) => void;
+        removeAllListeners: (channel: string) => void;
+      };
+    };
+  }
+}
 
 const SettingsView: React.FC = () => {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -18,13 +32,11 @@ const SettingsView: React.FC = () => {
         setSettings(savedSettings);
       } catch (error) {
         console.error('Error loading settings:', error);
-        setSettings(settingsService.defaultSettings);
+        setSettings(defaultSettings);
       }
     };
 
     loadSettings();
-
-    // Load input devices
     loadInputDevices();
   }, []);
 
@@ -36,7 +48,7 @@ const SettingsView: React.FC = () => {
       
       // If no device is selected and we have devices, select the first one
       if (!settings?.inputDeviceId && devices.length > 0) {
-        setSettings(prev => ({ ...prev, inputDeviceId: devices[0].deviceId }));
+        setSettings((prev) => prev ? { ...prev, inputDeviceId: devices[0].deviceId } : null);
       }
     } catch (err) {
       console.error('Error loading input devices:', err);
@@ -62,25 +74,41 @@ const SettingsView: React.FC = () => {
     try {
       setIsLoading(true);
       setError(null);
+      setSuccess(null);
       
       const result = await window.electron.ipcRenderer.invoke('select-directory');
       
       if (result.success) {
-        // First update the FileSystemService
-        await fileSystemService.setBaseDirectory(result.path);
-        
-        // Then update the settings
-        const updatedSettings = { ...settings, storageLocation: result.path };
-        await settingsService.updateSettings(updatedSettings);
-        setSettings(updatedSettings);
-        
-        setSuccess('Storage location updated successfully');
+        try {
+          // First update the FileSystemService
+          await fileSystemService.setBaseDirectory(result.path);
+          
+          // Then update the settings
+          const updatedSettings = { ...settings, storageLocation: result.path };
+          await settingsService.updateSettings(updatedSettings);
+          setSettings(updatedSettings);
+          
+          setSuccess('Storage location updated successfully. Your recordings will be saved to this location.');
+          setTimeout(() => setSuccess(null), 5000); // Clear success message after 5 seconds
+        } catch (err) {
+          console.error('Error updating storage location:', err);
+          setError('Failed to update storage location in settings. Please try again.');
+          
+          // Attempt to revert FileSystemService if settings update failed
+          try {
+            if (settings?.storageLocation) {
+              await fileSystemService.setBaseDirectory(settings.storageLocation);
+            }
+          } catch (revertError) {
+            console.error('Error reverting storage location:', revertError);
+          }
+        }
       } else {
-        setError(result.error || 'Failed to select directory');
+        setError(result.error || 'Failed to select directory. Please try again.');
       }
     } catch (err) {
       console.error('Error changing storage location:', err);
-      setError('Failed to change storage location');
+      setError('An unexpected error occurred while selecting the directory. Please try again.');
     } finally {
       setIsLoading(false);
     }

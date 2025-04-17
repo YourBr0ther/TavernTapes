@@ -3,7 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electron', {
   ipcRenderer: {
     invoke: (channel, data) => {
-      const validChannels = ['save-file', 'read-file', 'delete-file'];
+      const validChannels = ['save-file', 'read-file', 'delete-file', 'select-directory'];
       if (validChannels.includes(channel)) {
         return ipcRenderer.invoke(channel, data);
       }

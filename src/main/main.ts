@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import process from 'process';
 import { TrayManager } from './tray';
-import fs from 'fs/promises';
+import { promises as fs } from 'fs';
 import * as path from 'path';
 import { isDevelopment } from './utils';
 
@@ -209,15 +209,34 @@ ipcMain.handle('select-directory', async () => {
   try {
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory'],
-      title: 'Select Recording Storage Location'
+      title: 'Select Recording Storage Location',
+      buttonLabel: 'Select Folder',
+      message: 'Choose where to save your recordings'
     });
     
     if (!result.canceled && result.filePaths.length > 0) {
-      return { success: true, path: result.filePaths[0] };
+      const selectedPath = result.filePaths[0];
+      
+      try {
+        // Test write access to the selected directory
+        const testFile = path.join(selectedPath, '.test_write_access');
+        await fs.writeFile(testFile, '');
+        await fs.unlink(testFile);
+        
+        return { success: true, path: selectedPath };
+      } catch (error) {
+        return { 
+          success: false, 
+          error: 'Cannot write to selected directory. Please choose a directory with write permissions.' 
+        };
+      }
     }
     return { success: false, error: 'No directory selected' };
   } catch (error) {
     console.error('Error selecting directory:', error);
-    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    return { 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to select directory' 
+    };
   }
 }); 
