@@ -1,6 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import settingsService, { Settings, defaultSettings } from '../../services/SettingsService';
-import { AudioService } from '../../services/AudioService';
 import fileSystemService from '../../services/FileSystemService';
 
 // Extend Window interface to include our electron API
@@ -23,7 +22,6 @@ export const SettingsView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [inputDevices, setInputDevices] = useState<MediaDeviceInfo[]>([]);
-  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     loadSettings();
@@ -49,7 +47,7 @@ export const SettingsView: React.FC = () => {
     }
   };
 
-  const handleSettingChange = async (key: keyof Settings, value: Settings[keyof Settings]) => {
+  const handleSettingChange = useCallback(async (key: keyof Settings, value: Settings[keyof Settings]) => {
     const updatedSettings: Settings = {
       ...settings,
       [key]: value,
@@ -62,20 +60,17 @@ export const SettingsView: React.FC = () => {
 
     setSettings(updatedSettings);
     await saveSettings(updatedSettings);
-  };
+  }, [settings]);
 
-  const saveSettings = async (updatedSettings: Settings) => {
+  const saveSettings = useCallback(async (updatedSettings: Settings) => {
     try {
-      setIsSaving(true);
       await settingsService.updateSettings(updatedSettings);
     } catch (error) {
       console.error('Failed to save settings:', error);
-    } finally {
-      setIsSaving(false);
     }
-  };
+  }, []);
 
-  const handleStorageLocationChange = async () => {
+  const handleStorageLocationChange = useCallback(async () => {
     console.log('Storage location change requested');
     try {
       setIsLoading(true);
@@ -122,14 +117,14 @@ export const SettingsView: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [settings]);
 
   if (!settings) {
     return <div>Loading settings...</div>;
   }
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-[calc(100vh-8rem)] p-6">
+    <main className="flex flex-col items-center justify-center min-h-[calc(100vh-8rem)] p-6">
       <div className="w-full max-w-2xl space-y-8">
         {/* Error Message */}
         {error && (
@@ -146,19 +141,21 @@ export const SettingsView: React.FC = () => {
         )}
 
         {/* Audio Settings Section */}
-        <div className="bg-[#1C1C1C] rounded-lg p-6 border border-[#3A1078]/20">
-          <h2 className="text-xl font-bold mb-4 text-[#FFD700]">Audio Settings</h2>
+        <section className="bg-[#1C1C1C] rounded-lg p-6 border border-[#3A1078]/20" aria-labelledby="audio-settings-heading">
+          <h2 id="audio-settings-heading" className="text-xl font-bold mb-4 text-[#FFD700]">Audio Settings</h2>
           
           {/* Input Device Selection */}
           <div className="mb-6">
-            <label className="block text-sm font-medium text-[#FFD700]/80 mb-2">
+            <label htmlFor="input-device" className="block text-sm font-medium text-[#FFD700]/80 mb-2">
               Input Device
             </label>
             <select
+              id="input-device"
               value={settings.inputDeviceId}
               onChange={(e) => handleSettingChange('inputDeviceId', e.target.value)}
               className="w-full px-4 py-2 rounded-lg bg-[#1C1C1C] border border-[#3A1078]/30 focus:outline-none focus:border-[#FFD700]/50 text-white"
               disabled={isLoading}
+              aria-label="Select audio input device"
             >
               {inputDevices.map(device => (
                 <option key={device.deviceId} value={device.deviceId}>
@@ -170,13 +167,15 @@ export const SettingsView: React.FC = () => {
 
           {/* Audio Format Selection */}
           <div className="mb-6">
-            <label className="block text-sm font-medium text-[#FFD700]/80 mb-2">
+            <label htmlFor="audio-format" className="block text-sm font-medium text-[#FFD700]/80 mb-2">
               Audio Format
             </label>
             <select
+              id="audio-format"
               value={settings.format}
               onChange={(e) => handleSettingChange('format', e.target.value as 'wav' | 'mp3')}
               className="w-full px-4 py-2 rounded-lg bg-[#1C1C1C] border border-[#3A1078]/30 focus:outline-none focus:border-[#FFD700]/50 text-white"
+              aria-label="Select audio recording format"
             >
               <option value="wav">WAV</option>
               <option value="mp3">MP3</option>
@@ -185,10 +184,11 @@ export const SettingsView: React.FC = () => {
 
           {/* Quality Settings */}
           <div className="mb-6">
-            <label className="block text-sm font-medium text-[#FFD700]/80 mb-2">
+            <label htmlFor="audio-quality" className="block text-sm font-medium text-[#FFD700]/80 mb-2">
               Quality (kbps)
             </label>
             <input
+              id="audio-quality"
               type="number"
               value={settings.quality}
               onChange={(e) => handleSettingChange('quality', Number(e.target.value))}
@@ -196,21 +196,24 @@ export const SettingsView: React.FC = () => {
               max="320"
               step="32"
               className="w-full px-4 py-2 rounded-lg bg-[#1C1C1C] border border-[#3A1078]/30 focus:outline-none focus:border-[#FFD700]/50 text-white"
+              aria-label="Set audio quality in kilobits per second"
             />
           </div>
 
           {/* File Splitting Settings */}
           <div className="mb-6">
-            <label className="block text-sm font-medium text-[#FFD700]/80 mb-2">
+            <label htmlFor="split-interval" className="block text-sm font-medium text-[#FFD700]/80 mb-2">
               Split Recording Every (minutes)
             </label>
             <input
+              id="split-interval"
               type="number"
               value={settings.splitInterval}
               onChange={(e) => handleSettingChange('splitInterval', Number(e.target.value))}
               min="1"
               max="120"
               className="w-full px-4 py-2 rounded-lg bg-[#1C1C1C] border border-[#3A1078]/30 focus:outline-none focus:border-[#FFD700]/50 text-white"
+              aria-label="Set recording split interval in minutes"
             />
           </div>
 
@@ -218,37 +221,39 @@ export const SettingsView: React.FC = () => {
           <button
             onClick={() => handleSettingChange('format', settings.format)}
             disabled={isLoading}
-            className="w-full px-4 py-2 bg-[#3A1078] hover:bg-[#3A1078]/90 rounded-lg text-[#FFD700] font-bold transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label="Save audio settings"
+            className="w-full px-4 py-2 bg-[#3A1078] hover:bg-[#3A1078]/90 rounded-lg text-[#FFD700] font-bold transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-[#FFD700]/50"
           >
             {isLoading ? 'Saving...' : 'Save Settings'}
           </button>
-        </div>
+        </section>
 
         {/* Storage Settings Section */}
-        <div className="bg-[#1C1C1C] rounded-lg p-6 border border-[#3A1078]/20">
-          <h2 className="text-xl font-bold mb-4 text-[#FFD700]">Storage Settings</h2>
+        <section className="bg-[#1C1C1C] rounded-lg p-6 border border-[#3A1078]/20" aria-labelledby="storage-settings-heading">
+          <h2 id="storage-settings-heading" className="text-xl font-bold mb-4 text-[#FFD700]">Storage Settings</h2>
           
           {/* Storage Location */}
           <div className="mb-6">
-            <label className="block text-sm font-medium text-[#FFD700]/80 mb-2">
+            <label htmlFor="storage-location" className="block text-sm font-medium text-[#FFD700]/80 mb-2">
               Storage Location
             </label>
             <div className="flex items-center space-x-4">
-              <p className="flex-1 text-white">
-                {settings.storageLocation || defaultSettings.storageLocation}
+              <p id="storage-location" className="flex-1 text-white" aria-label="Current storage location">
+                {useMemo(() => settings.storageLocation || defaultSettings.storageLocation, [settings.storageLocation])}
               </p>
               <button
                 onClick={handleStorageLocationChange}
                 disabled={isLoading}
-                className="px-4 py-2 bg-[#3A1078] hover:bg-[#3A1078]/90 rounded-lg text-[#FFD700] font-bold transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                aria-label="Choose new storage directory for recordings"
+                className="px-4 py-2 bg-[#3A1078] hover:bg-[#3A1078]/90 rounded-lg text-[#FFD700] font-bold transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-[#FFD700]/50"
               >
                 Choose Directory
               </button>
             </div>
           </div>
-        </div>
+        </section>
       </div>
-    </div>
+    </main>
   );
 };
 

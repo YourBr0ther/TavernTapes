@@ -1,4 +1,3 @@
-import { RecordingMetadata } from './AudioService';
 
 export interface FileReference {
   id: string;
@@ -16,10 +15,12 @@ export interface FileReference {
 export class FileSystemService {
   private static instance: FileSystemService;
   private readonly DB_NAME = 'tavernTapesFiles';
-  private readonly DB_VERSION = 1;
+  private readonly DB_VERSION = 2; // Incremented for new audio store
   private db: IDBDatabase | null = null;
   private initializationPromise: Promise<void> | null = null;
   private baseDirectory: string = '';
+  private readonly MAX_RETRIES = 3;
+  private readonly RETRY_DELAY = 1000; // ms
 
   private constructor() {
     this.initializationPromise = this.initializeDB();
@@ -62,8 +63,15 @@ export class FileSystemService {
 
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
+        
+        // Create files store if it doesn't exist
         if (!db.objectStoreNames.contains('files')) {
           db.createObjectStore('files', { keyPath: 'id' });
+        }
+        
+        // Create audio blobs store if it doesn't exist
+        if (!db.objectStoreNames.contains('audioBlobs')) {
+          db.createObjectStore('audioBlobs', { keyPath: 'id' });
         }
       };
     });
@@ -77,6 +85,26 @@ export class FileSystemService {
       await this.initializationPromise;
     }
     return this.db!;
+  }
+
+  private async retryOperation<T>(
+    operation: () => Promise<T>,
+    retries: number = this.MAX_RETRIES
+  ): Promise<T> {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        if (attempt === retries) {
+          throw error;
+        }
+        
+        // Wait before retrying, with exponential backoff
+        await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY * attempt));
+        console.warn(`Operation failed (attempt ${attempt}/${retries}), retrying...`, error);
+      }
+    }
+    throw new Error('Retry operation failed - should not reach here');
   }
 
   public async getFileReference(id: string): Promise<FileReference> {
@@ -98,19 +126,23 @@ export class FileSystemService {
   }
 
   public async saveAudioFile(id: string, blob: Blob, metadata: FileReference['metadata']): Promise<FileReference> {
-    const path = await this.saveBlobToFileSystem(id, blob);
-    const fileReference: FileReference = { id, path, metadata };
-    await this.saveFileReference(fileReference);
-    return fileReference;
+    return this.retryOperation(async () => {
+      const path = await this.saveBlobToFileSystem(id, blob);
+      const fileReference: FileReference = { id, path, metadata };
+      await this.saveFileReference(fileReference);
+      return fileReference;
+    });
   }
 
   public async getAudioFile(fileReference: FileReference): Promise<Blob> {
-    return this.loadBlobFromFileSystem(fileReference.path);
+    return this.retryOperation(() => this.loadBlobFromFileSystem(fileReference.path));
   }
 
   public async deleteAudioFile(fileReference: FileReference): Promise<void> {
-    await this.deleteBlobFromFileSystem(fileReference.path);
-    await this.deleteFileReference(fileReference.id);
+    return this.retryOperation(async () => {
+      await this.deleteBlobFromFileSystem(fileReference.path);
+      await this.deleteFileReference(fileReference.id);
+    });
   }
 
   private async saveFileReference(fileReference: FileReference): Promise<void> {
@@ -138,27 +170,64 @@ export class FileSystemService {
   }
 
   private async saveBlobToFileSystem(id: string, blob: Blob): Promise<string> {
-    // Implementation depends on your file system access method
-    // For now, we'll just store it in memory
+    const db = await this.getDB();
     const path = `recordings/${id}`;
-    localStorage.setItem(path, await blob.text());
-    return path;
+    
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('audioBlobs', 'readwrite');
+      const store = transaction.objectStore('audioBlobs');
+      
+      // Store the blob with its ID
+      const request = store.put({ id, blob, path });
+      
+      request.onsuccess = () => resolve(path);
+      request.onerror = () => reject(new Error(`Failed to save audio blob: ${request.error}`));
+    });
   }
 
   private async loadBlobFromFileSystem(path: string): Promise<Blob> {
-    // Implementation depends on your file system access method
-    // For now, we'll just retrieve from memory
-    const data = localStorage.getItem(path);
-    if (!data) {
-      throw new Error(`File not found at path: ${path}`);
+    const db = await this.getDB();
+    // Extract ID from path (format: "recordings/{id}")
+    const id = path.split('/').pop();
+    
+    if (!id) {
+      throw new Error(`Invalid path format: ${path}`);
     }
-    return new Blob([data], { type: 'audio/wav' });
+    
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('audioBlobs', 'readonly');
+      const store = transaction.objectStore('audioBlobs');
+      const request = store.get(id);
+      
+      request.onsuccess = () => {
+        const result = request.result;
+        if (result && result.blob) {
+          resolve(result.blob);
+        } else {
+          reject(new Error(`Audio file not found for path: ${path}`));
+        }
+      };
+      request.onerror = () => reject(new Error(`Failed to load audio blob: ${request.error}`));
+    });
   }
 
   private async deleteBlobFromFileSystem(path: string): Promise<void> {
-    // Implementation depends on your file system access method
-    // For now, we'll just remove from memory
-    localStorage.removeItem(path);
+    const db = await this.getDB();
+    // Extract ID from path (format: "recordings/{id}")
+    const id = path.split('/').pop();
+    
+    if (!id) {
+      throw new Error(`Invalid path format: ${path}`);
+    }
+    
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('audioBlobs', 'readwrite');
+      const store = transaction.objectStore('audioBlobs');
+      const request = store.delete(id);
+      
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(new Error(`Failed to delete audio blob: ${request.error}`));
+    });
   }
 }
 

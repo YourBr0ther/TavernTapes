@@ -44,6 +44,7 @@
     "electron": "^28.3.3",
     "electron-builder": "^24.9.1",
     "glob": "^10.3.10",
+    "jsdom": "^26.1.0",
     "lru-cache": "^10.2.0",
     "msw": "^2.2.1",
     "postcss": "^8.4.35",

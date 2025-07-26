@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CrashRecoveryService } from '../CrashRecoveryService';
-import { RecordingMetadata } from '../AudioService';
-import { FileReference } from '../FileSystemService';
+
+interface RecordingMetadata {
+  sessionName: string;
+  startTime: Date;
+  duration: number;
+  fileSize: number;
+  format: 'wav' | 'mp3';
+  quality: number;
+}
 
 describe('CrashRecoveryService', () => {
   let mockDB: any;

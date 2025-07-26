@@ -1,22 +1,5 @@
-import { FileSystemService, FileReference } from './FileSystemService';
-
-export interface Session {
-  id: string;
-  createdAt: Date;
-  metadata: {
-    sessionName: string;
-    duration: number;
-    format: 'wav' | 'mp3';
-    quality: number;
-    fileSize: number;
-  };
-  filePath: string;
-}
-
-export interface ExportOptions {
-  format?: 'wav' | 'mp3';
-  quality?: number;
-}
+import { FileSystemService } from './FileSystemService';
+import { Session, ExportOptions } from '../types/Session';
 
 class SessionService {
   private static instance: SessionService;
@@ -110,6 +93,160 @@ class SessionService {
     } catch (error) {
       console.error('Error adding session:', error);
       throw new Error('Failed to add session');
+    }
+  }
+
+  public async getAllSessions(): Promise<Session[]> {
+    try {
+      const db = await this.getDB();
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction('sessions', 'readonly');
+        const store = transaction.objectStore('sessions');
+        const request = store.getAll();
+
+        request.onsuccess = () => resolve(request.result || []);
+        request.onerror = () => reject(request.error);
+      });
+    } catch (error) {
+      console.error('Error getting all sessions:', error);
+      throw new Error('Failed to get all sessions');
+    }
+  }
+
+  public async searchSessions(query: string): Promise<Session[]> {
+    try {
+      const allSessions = await this.getAllSessions();
+      const lowerQuery = query.toLowerCase();
+      
+      return allSessions.filter(session => {
+        const nameMatch = session.metadata.sessionName.toLowerCase().includes(lowerQuery);
+        const tagsMatch = session.tags?.some(tag => tag.toLowerCase().includes(lowerQuery)) || false;
+        const notesMatch = session.notes?.some(note => note.toLowerCase().includes(lowerQuery)) || false;
+        
+        return nameMatch || tagsMatch || notesMatch;
+      });
+    } catch (error) {
+      console.error('Error searching sessions:', error);
+      throw new Error('Failed to search sessions');
+    }
+  }
+
+  public async addNoteToSession(sessionId: string, note: string): Promise<void> {
+    try {
+      const db = await this.getDB();
+      const transaction = db.transaction('sessions', 'readwrite');
+      const store = transaction.objectStore('sessions');
+      
+      const session = await new Promise<Session>((resolve, reject) => {
+        const request = store.get(sessionId);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+
+      if (!session) {
+        throw new Error('Session not found');
+      }
+
+      session.notes = session.notes || [];
+      session.notes.push(note);
+
+      return new Promise((resolve, reject) => {
+        const request = store.put(session);
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
+      });
+    } catch (error) {
+      console.error('Error adding note to session:', error);
+      throw new Error('Failed to add note to session');
+    }
+  }
+
+  public async addTagsToSession(sessionId: string, tags: string[]): Promise<void> {
+    try {
+      const db = await this.getDB();
+      const transaction = db.transaction('sessions', 'readwrite');
+      const store = transaction.objectStore('sessions');
+      
+      const session = await new Promise<Session>((resolve, reject) => {
+        const request = store.get(sessionId);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+
+      if (!session) {
+        throw new Error('Session not found');
+      }
+
+      if (!session.tags) {
+        session.tags = [];
+      }
+      
+      tags.forEach(tag => {
+        if (session.tags && !session.tags.includes(tag)) {
+          session.tags.push(tag);
+        }
+      });
+
+      return new Promise((resolve, reject) => {
+        const request = store.put(session);
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
+      });
+    } catch (error) {
+      console.error('Error adding tags to session:', error);
+      throw new Error('Failed to add tags to session');
+    }
+  }
+
+  public async removeTagFromSession(sessionId: string, tag: string): Promise<void> {
+    try {
+      const db = await this.getDB();
+      const transaction = db.transaction('sessions', 'readwrite');
+      const store = transaction.objectStore('sessions');
+      
+      const session = await new Promise<Session>((resolve, reject) => {
+        const request = store.get(sessionId);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+
+      if (!session) {
+        throw new Error('Session not found');
+      }
+
+      if (session.tags) {
+        session.tags = session.tags.filter(t => t !== tag);
+      }
+
+      return new Promise((resolve, reject) => {
+        const request = store.put(session);
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
+      });
+    } catch (error) {
+      console.error('Error removing tag from session:', error);
+      throw new Error('Failed to remove tag from session');
+    }
+  }
+
+  public async exportSessionToFile(sessionId: string, outputPath: string): Promise<void> {
+    try {
+      const session = await this.exportSession(sessionId);
+      // Convert blob to file and save
+      const buffer = await session.arrayBuffer();
+      const uint8Array = new Uint8Array(buffer);
+      
+      if (window.electron) {
+        await window.electron.ipcRenderer.invoke('save-file', {
+          path: outputPath,
+          data: Array.from(uint8Array)
+        });
+      } else {
+        throw new Error('Electron API not available');
+      }
+    } catch (error) {
+      console.error('Error exporting session to file:', error);
+      throw new Error('Failed to export session to file');
     }
   }
 }

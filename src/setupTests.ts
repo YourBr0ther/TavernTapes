@@ -49,7 +49,7 @@ const mockMediaRecorder = {
 };
 
 class MockMediaRecorder {
-  static isTypeSupported(type: string): boolean {
+  static isTypeSupported(): boolean {
     return true;
   }
 

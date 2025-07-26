@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AudioService, RecordingOptions, RecordingMetadata } from '../AudioService';
-import { FileSystemService } from '../FileSystemService';
+import { AudioService, RecordingOptions } from '../AudioService';
 import { CrashRecoveryService } from '../CrashRecoveryService';
 import RecordRTC from 'recordrtc';
 

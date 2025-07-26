@@ -11,6 +11,8 @@ export interface Session {
   createdAt: Date;
   metadata: SessionMetadata;
   filePath: string;
+  notes?: string[];
+  tags?: string[];
 }
 
 export interface ExportOptions {

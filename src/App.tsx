@@ -1,6 +1,7 @@
 import React, { useEffect, useState, lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import MainLayout from './components/layout/MainLayout';
+import ErrorBoundary from './components/ErrorBoundary';
 import { RecordingOptions } from './services/AudioService';
 import settingsService from './services/SettingsService';
 import fileSystemService from './services/FileSystemService';
@@ -19,7 +20,7 @@ const LoadingSpinner: React.FC = () => (
 );
 
 const App: React.FC = () => {
-  const [recordingSettings, setRecordingSettings] = useState<RecordingOptions>({
+  const [recordingSettings] = useState<RecordingOptions>({
     format: 'wav',
     quality: 128,
     splitInterval: 30,
@@ -57,8 +58,10 @@ const App: React.FC = () => {
     initializeApp();
   }, []);
 
-  const handleSettingsChange = (settings: RecordingOptions) => {
-    setRecordingSettings(settings);
+
+  const handleRecordingComplete = (metadata: any) => {
+    // Handle recording completion
+    console.log('Recording completed:', metadata);
   };
 
   if (!isInitialized || !settings) {
@@ -66,20 +69,24 @@ const App: React.FC = () => {
   }
 
   return (
-    <Router>
-      <MainLayout>
-        <Suspense fallback={<LoadingSpinner />}>
-          <Routes>
-            <Route path="/" element={<RecordingView settings={recordingSettings} />} />
-            <Route path="/sessions" element={<SessionsView />} />
-            <Route 
-              path="/settings" 
-              element={<SettingsView onSettingsChange={handleSettingsChange} />} 
-            />
-          </Routes>
-        </Suspense>
-      </MainLayout>
-    </Router>
+    <ErrorBoundary>
+      <Router>
+        <MainLayout>
+          <Suspense fallback={<LoadingSpinner />}>
+            <ErrorBoundary>
+              <Routes>
+                <Route path="/" element={<RecordingView settings={recordingSettings} onRecordingComplete={handleRecordingComplete} />} />
+                <Route path="/sessions" element={<SessionsView />} />
+                <Route 
+                  path="/settings" 
+                  element={<SettingsView />} 
+                />
+              </Routes>
+            </ErrorBoundary>
+          </Suspense>
+        </MainLayout>
+      </Router>
+    </ErrorBoundary>
   );
 };
 

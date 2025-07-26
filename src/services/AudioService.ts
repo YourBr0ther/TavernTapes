@@ -1,17 +1,8 @@
 import RecordRTC from 'recordrtc';
 import sessionService from './SessionService';
+import { Session } from '../types/Session';
 import { CrashRecoveryService } from './CrashRecoveryService';
 import fileSystemService, { FileReference } from './FileSystemService';
-
-interface Session {
-  id: string;
-  name: string;
-  startTime: Date;
-  duration: number;
-  fileSize: number;
-  format: string;
-  quality: number;
-}
 
 interface RecoveryState {
   sessionName: string;
@@ -58,7 +49,6 @@ export class AudioService {
   private animationFrameId: number | null = null;
   private mediaStream: MediaStream | null = null;
   private maxChunks: number = 100;
-  private chunkSize: number = 1024 * 1024;
   private lastSplitTime: number = 0;
   private crashRecoveryService: CrashRecoveryService;
   private stateSaveInterval: NodeJS.Timeout | null = null;
@@ -330,7 +320,14 @@ export class AudioService {
         }, 10000); // 10 second timeout
 
         // First, get the current blob before stopping
-        const currentBlob = this.recorder!.getBlob();
+        if (!this.recorder) {
+          clearTimeout(timeoutId);
+          this.cleanup();
+          reject(new Error('Recorder not initialized'));
+          return;
+        }
+        
+        const currentBlob = this.recorder.getBlob();
         if (!currentBlob) {
           clearTimeout(timeoutId);
           this.cleanup();
@@ -338,7 +335,7 @@ export class AudioService {
           return;
         }
 
-        this.recorder!.stopRecording(async () => {
+        this.recorder.stopRecording(async () => {
           try {
             if (stopCompleted) return; // Prevent double execution
             stopCompleted = true;
@@ -400,7 +397,12 @@ export class AudioService {
 
     const currentTime = Date.now();
     const timeSinceLastSplit = (currentTime - this.lastSplitTime) / 1000 / 60; // in minutes
-    const blob = this.recorder!.getBlob();
+    
+    if (!this.recorder) {
+      return;
+    }
+    
+    const blob = this.recorder.getBlob();
     const currentSizeMB = blob.size / (1024 * 1024);
 
     if ((this.recordingOptions.splitInterval && timeSinceLastSplit >= this.recordingOptions.splitInterval) ||
@@ -411,8 +413,13 @@ export class AudioService {
   }
 
   private splitRecording(): void {
+    if (!this.recorder) {
+      console.error('Cannot split recording - recorder not initialized');
+      return;
+    }
+    
     // Get the current recording data
-    const blob = this.recorder!.getBlob();
+    const blob = this.recorder.getBlob();
     
     // Format the date for the filename
     const date = new Date();
@@ -457,6 +464,13 @@ export class AudioService {
             this.splitRecording();
           }
           
+          // Periodic cleanup to prevent excessive memory usage
+          if (this.audioChunks.length > this.maxChunks * 0.8) {
+            // Keep only the most recent chunks to maintain continuity
+            const keepChunks = Math.floor(this.maxChunks * 0.5);
+            this.audioChunks = this.audioChunks.slice(-keepChunks);
+          }
+          
           // Check if we need to split based on time or size
           this.checkSplitConditions();
         }
@@ -493,12 +507,15 @@ export class AudioService {
       // Save the session metadata
       const session: Session = {
         id: this.currentSessionId,
-        name: metadata.sessionName,
-        startTime: metadata.startTime,
-        duration: metadata.duration,
-        fileSize: metadata.fileSize,
-        format: metadata.format,
-        quality: metadata.quality
+        createdAt: metadata.startTime,
+        metadata: {
+          sessionName: metadata.sessionName,
+          duration: metadata.duration,
+          format: metadata.format as 'wav' | 'mp3',
+          quality: metadata.quality,
+          fileSize: metadata.fileSize
+        },
+        filePath: fileReference.path
       };
 
       await sessionService.addSession(session);
@@ -573,6 +590,9 @@ export class AudioService {
       this.currentDuration = 0;
       this.currentSessionId = null;
       this.currentFileReference = null;
+      // Clear audio chunks to prevent memory leaks
+      this.audioChunks = [];
+      this.lastSplitTime = 0;
     } catch (error) {
       console.error('Error during cleanup:', error);
       // Reset critical state even if cleanup fails
@@ -580,6 +600,7 @@ export class AudioService {
       this._isPaused = false;
       this.recorder = null;
       this.mediaStream = null;
+      this.audioChunks = [];
     }
   }
 

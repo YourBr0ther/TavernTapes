@@ -56,27 +56,6 @@ export class CrashRecoveryService {
     return this.db!;
   }
 
-  private cleanupStaleRecovery(): void {
-    const db = this.db;
-    if (!db) return;
-
-    const transaction = db.transaction('recovery', 'readwrite');
-    const store = transaction.objectStore('recovery');
-    const index = store.index('startTime');
-    const request = index.getAll();
-
-    request.onsuccess = () => {
-      const states = request.result;
-      const now = Date.now();
-      const staleStates = states.filter(state => 
-        now - new Date(state.startTime).getTime() > 24 * 60 * 60 * 1000
-      );
-
-      staleStates.forEach(state => {
-        store.delete(state.id);
-      });
-    };
-  }
 
   async saveState(state: RecoveryState): Promise<void> {
     const db = await this.getDB();

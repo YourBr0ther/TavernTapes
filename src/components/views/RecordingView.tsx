@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, lazy, Suspense } from 'react';
 import { AudioService, RecordingOptions } from '../../services/AudioService';
 import { formatTime } from '../../utils/timeUtils';
+import Validator from '../../utils/validation';
 
 // Lazy load the RecoveryDialog
 const RecoveryDialog = lazy(() => import('../dialogs/RecoveryDialog'));
@@ -189,7 +190,18 @@ const RecordingView: React.FC<RecordingViewProps> = ({ onRecordingComplete, sett
     try {
       setIsLoading(true);
       setError(null);
-      await audioServiceRef.current?.startRecording(sessionName);
+      
+      // Validate session name
+      const validation = Validator.validateSessionName(sessionName);
+      if (!validation.isValid) {
+        setError(validation.errors.join(', '));
+        return;
+      }
+      
+      // Sanitize session name
+      const sanitizedName = Validator.sanitizeFileName(sessionName) || 'Untitled Session';
+      
+      await audioServiceRef.current?.startRecording(sanitizedName);
       setIsRecording(true);
       setIsPaused(false);
       setDuration(0);
