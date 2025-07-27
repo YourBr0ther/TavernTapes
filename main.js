@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, powerSaveBlocker, dialog } from 'electron'
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import process from 'process';
-import { TrayManager } from './src/main/tray.js';
+import { TrayManager } from './dist/main/tray.js';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -23,7 +23,7 @@ function createWindow() {
       contextIsolation: true,
       webSecurity: true,
       preload: isDev
-        ? join(__dirname, '..', 'dist', 'preload', 'preload.js')
+        ? join(__dirname, 'dist', 'preload', 'preload.js')
         : join(__dirname, 'preload', 'preload.js'),
       permissions: {
         media: true,
