@@ -1,4 +1,5 @@
 import { Component, ErrorInfo, ReactNode } from 'react';
+import { createComponentLogger } from '../utils/logger';
 
 interface Props {
   children: ReactNode;
@@ -13,9 +14,12 @@ interface State {
 }
 
 export class ErrorBoundary extends Component<Props, State> {
+  private logger = createComponentLogger('ErrorBoundary');
+
   constructor(props: Props) {
     super(props);
     this.state = { hasError: false };
+    this.logger.debug('ErrorBoundary initialized');
   }
 
   static getDerivedStateFromError(error: Error): State {
@@ -23,7 +27,11 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('ErrorBoundary caught an error:', error, errorInfo);
+    this.logger.error('React error boundary caught an error', error, {
+      method: 'componentDidCatch',
+      componentStack: errorInfo.componentStack,
+      errorBoundary: 'ErrorBoundary'
+    });
     
     this.setState({
       error,
@@ -32,11 +40,17 @@ export class ErrorBoundary extends Component<Props, State> {
 
     // Call optional error handler
     if (this.props.onError) {
-      this.props.onError(error, errorInfo);
+      try {
+        this.props.onError(error, errorInfo);
+        this.logger.debug('Custom error handler called successfully');
+      } catch (handlerError) {
+        this.logger.error('Error in custom error handler', handlerError, { method: 'componentDidCatch' });
+      }
     }
   }
 
   private handleRetry = () => {
+    this.logger.info('User initiated error boundary retry', { method: 'handleRetry' });
     this.setState({ hasError: false, error: undefined, errorInfo: undefined });
   };
 

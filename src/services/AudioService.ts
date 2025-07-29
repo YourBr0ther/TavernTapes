@@ -3,6 +3,7 @@ import sessionService from './SessionService';
 import { Session } from '../types/Session';
 import { CrashRecoveryService } from './CrashRecoveryService';
 import fileSystemService, { FileReference } from './FileSystemService';
+import { createServiceLogger } from '../utils/logger';
 
 interface RecoveryState {
   sessionName: string;
@@ -54,30 +55,62 @@ export class AudioService {
   private stateSaveInterval: NodeJS.Timeout | null = null;
   private currentSessionId: string | null = null;
   private currentFileReference: FileReference | null = null;
+  private logger = createServiceLogger('AudioService');
 
   private constructor(options: RecordingOptions) {
     this.recordingOptions = options;
     this.crashRecoveryService = CrashRecoveryService.getInstance();
+    this.logger.info('AudioService initialized', { 
+      options: this.recordingOptions,
+      maxChunks: this.maxChunks 
+    });
   }
 
   public static getInstance(options?: RecordingOptions): AudioService {
-    if (!AudioService.instance && options) {
-      AudioService.instance = new AudioService(options);
-    } else if (!AudioService.instance) {
-      throw new Error('AudioService must be initialized with options first');
+    try {
+      if (!AudioService.instance && options) {
+        AudioService.instance = new AudioService(options);
+      } else if (!AudioService.instance) {
+        const error = new Error('AudioService must be initialized with options first');
+        console.error('[AudioService] Failed to get instance - no options provided');
+        throw error;
+      }
+      return AudioService.instance;
+    } catch (error) {
+      console.error('[AudioService] Error getting instance:', error);
+      throw error;
     }
-    return AudioService.instance;
   }
 
   public static resetInstance(): void {
-    if (AudioService.instance) {
-      AudioService.instance.cleanup();
+    try {
+      if (AudioService.instance) {
+        console.log('[AudioService] Resetting instance and cleaning up resources');
+        AudioService.instance.cleanup();
+      }
+      AudioService.instance = null;
+    } catch (error) {
+      console.error('[AudioService] Error during instance reset:', error);
+      AudioService.instance = null; // Force reset even on error
     }
-    AudioService.instance = null;
   }
 
   public updateOptions(options: RecordingOptions): void {
-    this.recordingOptions = { ...this.recordingOptions, ...options };
+    try {
+      const previousOptions = { ...this.recordingOptions };
+      this.recordingOptions = { ...this.recordingOptions, ...options };
+      this.logger.info('Recording options updated', { 
+        method: 'updateOptions',
+        previousOptions, 
+        newOptions: this.recordingOptions 
+      });
+    } catch (error) {
+      this.logger.error('Failed to update recording options', error, { 
+        method: 'updateOptions',
+        attemptedOptions: options 
+      });
+      throw error;
+    }
   }
 
   public setAudioLevelCallback(callback: (level: number) => void): void {
@@ -87,10 +120,14 @@ export class AudioService {
   // Add method to get available input devices
   static async getInputDevices(): Promise<MediaDeviceInfo[]> {
     try {
+      console.log('[AudioService] Enumerating audio input devices');
       const devices = await navigator.mediaDevices.enumerateDevices();
-      return devices.filter(device => device.kind === 'audioinput');
+      const audioInputs = devices.filter(device => device.kind === 'audioinput');
+      console.log(`[AudioService] Found ${audioInputs.length} audio input devices:`, 
+        audioInputs.map(d => ({ id: d.deviceId, label: d.label || 'Unknown Device' })));
+      return audioInputs;
     } catch (error) {
-      console.error('Error getting input devices:', error);
+      console.error('[AudioService] Error getting input devices:', error);
       return [];
     }
   }
@@ -112,6 +149,35 @@ export class AudioService {
     this.resumeRecording();
   }
 
+  // Add a force stop method to handle stuck states
+  public async forceStop(): Promise<RecordingMetadata | null> {
+    this.logger.warn('Force stop requested', {
+      method: 'forceStop',
+      isRecording: this._isRecording,
+      isPaused: this._isPaused,
+      hasRecorder: !!this.recorder,
+      hasMediaStream: !!this.mediaStream
+    });
+
+    try {
+      // Try to reset state and stop properly
+      if (this.recorder) {
+        this._isRecording = true; // Force the state to allow stopping
+        return await this.stopRecording();
+      }
+    } catch (error) {
+      this.logger.error('Force stop also failed, performing emergency cleanup', error, { method: 'forceStop' });
+    }
+
+    // Emergency cleanup
+    this.cleanup();
+    this._isRecording = false;
+    this._isPaused = false;
+    this.currentDuration = 0;
+    
+    return null;
+  }
+
   // Public methods for state checking
   public isRecording(): boolean {
     return this._isRecording;
@@ -122,52 +188,97 @@ export class AudioService {
   }
 
   async startRecording(sessionName: string = ''): Promise<void> {
+    const startTime = Date.now();
+    this.logger.info('Starting recording session', { 
+      method: 'startRecording',
+      sessionName,
+      currentState: {
+        isRecording: this._isRecording,
+        isPaused: this._isPaused
+      },
+      options: this.recordingOptions
+    });
+
     try {
+      // Check for crash recovery
       const recoveryState = await this.crashRecoveryService.getRecoveryState();
       if (recoveryState) {
+        this.logger.info('Found crash recovery state', { 
+          method: 'startRecording',
+          recoveryState: {
+            sessionName: recoveryState.sessionName,
+            startTime: recoveryState.startTime,
+            duration: recoveryState.duration,
+            isPaused: recoveryState.isPaused
+          }
+        });
+
         const shouldRecover = window.confirm(
           'A previous recording session was interrupted. Would you like to recover it?'
         );
         
         if (shouldRecover) {
+          this.logger.info('User chose to recover previous session');
           this.currentSessionName = recoveryState.sessionName;
           this.recordingStartTime = recoveryState.startTime;
           this.currentDuration = recoveryState.duration;
           this._isPaused = recoveryState.isPaused;
           this.currentFileReference = recoveryState.currentFileReference;
           await this.crashRecoveryService.clearRecoveryState();
+        } else {
+          this.logger.info('User chose not to recover previous session');
         }
       }
 
       if (this._isRecording) {
-        throw new Error('Recording is already in progress');
+        const error = new Error('Recording is already in progress');
+        this.logger.error('Cannot start recording - already in progress', error, { method: 'startRecording' });
+        throw error;
       }
 
-      const permissionResult = await navigator.mediaDevices.getUserMedia({ audio: true });
-      permissionResult.getTracks().forEach(track => track.stop());
+      // Test microphone permissions first
+      this.logger.debug('Testing microphone permissions');
+      try {
+        const permissionResult = await navigator.mediaDevices.getUserMedia({ audio: true });
+        permissionResult.getTracks().forEach(track => track.stop());
+        this.logger.debug('Microphone permission test successful');
+      } catch (permError) {
+        this.logger.error('Microphone permission denied or unavailable', permError, { method: 'startRecording' });
+        throw new Error('Microphone access denied. Please grant microphone permissions and try again.');
+      }
 
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          deviceId: this.recordingOptions.inputDeviceId ? { exact: this.recordingOptions.inputDeviceId } : undefined,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 2,
-          sampleRate: 44100
-        }
+      // Get media stream with full configuration
+      const audioConstraints = {
+        deviceId: this.recordingOptions.inputDeviceId ? { exact: this.recordingOptions.inputDeviceId } : undefined,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 2,
+        sampleRate: 44100
+      };
+
+      this.logger.debug('Requesting media stream', { audioConstraints });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+      this.mediaStream = stream;
+      this.logger.info('Media stream obtained successfully', {
+        method: 'startRecording',
+        streamId: stream.id,
+        trackCount: stream.getAudioTracks().length
       });
 
-      this.mediaStream = stream;
-
+      // Set up audio analysis
       try {
+        this.logger.debug('Setting up audio analysis context');
         this.audioContext = new AudioContext();
         const source = this.audioContext.createMediaStreamSource(stream);
         this.analyser = this.audioContext.createAnalyser();
         this.analyser.fftSize = 256;
         source.connect(this.analyser);
         this.startAudioLevelMonitoring();
+        this.logger.debug('Audio analysis setup completed');
       } catch (error) {
-        console.error('Audio analysis setup failed:', error);
+        this.logger.error('Audio analysis setup failed', error, { method: 'startRecording' });
+        // Continue without audio analysis - not critical for recording
       }
 
       const options: RecordRTC.Options & { onerror?: (error: any) => void } = {
@@ -181,34 +292,50 @@ export class AudioService {
         bitrate: this.recordingOptions.quality * 1000,
         timeSlice: 1000,
         ondataavailable: async (blob: Blob) => {
-          if (this._isRecording && !this._isPaused) {
-            if (!this.currentSessionId) {
-              this.currentSessionId = crypto.randomUUID();
+          try {
+            if (this._isRecording && !this._isPaused) {
+              if (!this.currentSessionId) {
+                this.currentSessionId = crypto.randomUUID();
+                this.logger.debug('Generated new session ID', { sessionId: this.currentSessionId });
+              }
+
+              const metadata: RecordingMetadata = {
+                sessionName: this.currentSessionName,
+                startTime: this.recordingStartTime!,
+                duration: this.currentDuration,
+                fileSize: blob.size,
+                format: this.recordingOptions.format,
+                quality: this.recordingOptions.quality
+              };
+
+              this.currentFileReference = await fileSystemService.saveAudioFile(
+                this.currentSessionId,
+                blob,
+                metadata
+              );
+
+              this.logger.debug('Audio chunk saved', { 
+                blobSize: blob.size,
+                duration: this.currentDuration,
+                sessionId: this.currentSessionId
+              });
             }
-
-            const metadata: RecordingMetadata = {
-              sessionName: this.currentSessionName,
-              startTime: this.recordingStartTime!,
-              duration: this.currentDuration,
-              fileSize: blob.size,
-              format: this.recordingOptions.format,
-              quality: this.recordingOptions.quality
-            };
-
-            this.currentFileReference = await fileSystemService.saveAudioFile(
-              this.currentSessionId,
-              blob,
-              metadata
-            );
+          } catch (error) {
+            this.logger.error('Failed to save audio chunk', error, { 
+              method: 'ondataavailable',
+              blobSize: blob.size,
+              sessionId: this.currentSessionId
+            });
           }
         },
         onerror: (error: any) => {
-          console.error('RecordRTC error:', error);
+          this.logger.error('RecordRTC error occurred', error, { method: 'startRecording' });
           this.cleanup();
           throw new Error('Recording failed: ' + error.message);
         }
       };
 
+      this.logger.debug('Creating RecordRTC instance', { options: { ...options, ondataavailable: '[Function]', onerror: '[Function]' } });
       this.recorder = new RecordRTC(stream, options);
       
       const date = new Date();
@@ -224,16 +351,43 @@ export class AudioService {
       this.currentDuration = 0;
       this.currentSessionId = crypto.randomUUID();
 
+      this.logger.info('Recording configuration set', {
+        method: 'startRecording',
+        sessionName: this.currentSessionName,
+        sessionId: this.currentSessionId,
+        startTime: this.recordingStartTime
+      });
+
       await this.recorder.startRecording();
       this.startTimer();
       this.startStateSaving();
+
+      const totalSetupTime = Date.now() - startTime;
+      this.logger.info('Recording started successfully', {
+        method: 'startRecording',
+        sessionName: this.currentSessionName,
+        sessionId: this.currentSessionId,
+        setupTimeMs: totalSetupTime
+      });
+
     } catch (error) {
+      const totalTime = Date.now() - startTime;
+      this.logger.error('Failed to start recording', error, {
+        method: 'startRecording',
+        sessionName,
+        setupTimeMs: totalTime,
+        options: this.recordingOptions
+      });
+
       this.cleanup();
+      
       if (error instanceof Error) {
         if (error.name === 'NotAllowedError') {
           throw new Error('Microphone access was denied. Please grant permission to record audio.');
         } else if (error.name === 'NotFoundError') {
           throw new Error('No microphone found. Please connect a microphone and try again.');
+        } else if (error.name === 'OverconstrainedError') {
+          throw new Error('The selected audio device does not meet the required constraints. Please try a different microphone.');
         } else {
           throw new Error(`Failed to start recording: ${error.message}`);
         }
@@ -292,16 +446,43 @@ export class AudioService {
   }
 
   async stopRecording(): Promise<RecordingMetadata> {
-    if (!this._isRecording) {
-      throw new Error('No recording in progress');
+    const stopStartTime = Date.now();
+    this.logger.info('Stopping recording session', { 
+      method: 'stopRecording',
+      sessionName: this.currentSessionName,
+      sessionId: this.currentSessionId,
+      duration: this.currentDuration,
+      isRecording: this._isRecording,
+      isPaused: this._isPaused,
+      hasRecorder: !!this.recorder,
+      hasMediaStream: !!this.mediaStream
+    });
+
+    // Check if we have a recorder even if the flag is wrong
+    if (!this._isRecording && !this.recorder) {
+      const error = new Error('No recording in progress');
+      this.logger.error('Cannot stop recording - not currently recording and no recorder', error, { method: 'stopRecording' });
+      throw error;
+    }
+
+    // If we have a recorder but the flag is wrong, fix the state and continue
+    if (!this._isRecording && this.recorder) {
+      this.logger.warn('State inconsistency detected: have recorder but _isRecording is false, correcting state', {
+        method: 'stopRecording',
+        hasRecorder: true,
+        isRecording: this._isRecording
+      });
+      this._isRecording = true; // Correct the state
     }
 
     if (!this.recorder) {
-      throw new Error('Recorder not initialized');
+      const error = new Error('Recorder not initialized');
+      this.logger.error('Cannot stop recording - recorder not initialized', error, { method: 'stopRecording' });
+      throw error;
     }
 
     if (this._isPaused) {
-      // Resume recording before stopping to ensure proper state
+      this.logger.debug('Recording is paused, resuming before stop');
       this.resumeRecording();
     }
 
@@ -314,63 +495,118 @@ export class AudioService {
         const timeoutId = setTimeout(() => {
           if (!stopCompleted) {
             stopCompleted = true;
+            const timeoutError = new Error('Recording stop operation timed out');
+            this.logger.error('Recording stop operation timed out', timeoutError, { 
+              method: 'stopRecording',
+              timeoutMs: 10000,
+              sessionId: this.currentSessionId
+            });
             this.cleanup();
-            reject(new Error('Recording stop operation timed out'));
+            reject(timeoutError);
           }
         }, 10000); // 10 second timeout
 
         // First, get the current blob before stopping
         if (!this.recorder) {
           clearTimeout(timeoutId);
+          const error = new Error('Recorder not initialized during stop');
+          this.logger.error('Recorder became null during stop operation', error, { method: 'stopRecording' });
           this.cleanup();
-          reject(new Error('Recorder not initialized'));
+          reject(error);
           return;
         }
         
-        const currentBlob = this.recorder.getBlob();
-        if (!currentBlob) {
-          clearTimeout(timeoutId);
-          this.cleanup();
-          reject(new Error('Failed to get recording blob'));
-          return;
-        }
-
+        this.logger.debug('Initiating recording stop without pre-fetching blob');
+        
+        // Don't try to get blob before stopping - let RecordRTC handle it
         this.recorder.stopRecording(async () => {
           try {
-            if (stopCompleted) return; // Prevent double execution
+            if (stopCompleted) {
+              this.logger.warn('Stop callback called multiple times, ignoring', { method: 'stopRecording' });
+              return;
+            }
             stopCompleted = true;
             clearTimeout(timeoutId);
+
+            this.logger.debug('Recording stop callback triggered, getting final blob');
+
+            // Get the blob after stopping
+            let finalBlob: Blob;
+            try {
+              finalBlob = this.recorder!.getBlob();
+              this.logger.debug('Got final blob after stop', { size: finalBlob.size });
+            } catch (blobError) {
+              this.logger.error('Failed to get final blob after stop', blobError, { method: 'stopRecording' });
+              // Create empty blob as fallback
+              finalBlob = new Blob([], { type: 'audio/wav' });
+            }
+
+            if (!finalBlob || finalBlob.size === 0) {
+              this.logger.warn('Final blob is empty or null, creating fallback blob');
+              finalBlob = new Blob([], { type: 'audio/wav' });
+            }
 
             const metadata: RecordingMetadata = {
               sessionName: this.currentSessionName,
               startTime: this.recordingStartTime!,
               duration: this.currentDuration,
-              fileSize: currentBlob.size,
+              fileSize: finalBlob.size,
               format: this.recordingOptions.format,
               quality: this.recordingOptions.quality
             };
 
+            this.logger.debug('Saving recording data', { metadata });
+
             // Save recording before cleanup
-            await this.saveRecording(currentBlob, metadata);
+            if (finalBlob.size > 0) {
+              await this.saveRecording(finalBlob, metadata);
+            } else {
+              this.logger.warn('Skipping save of empty recording blob');
+            }
+            this.logger.debug('Recording saved successfully');
+
             await this.crashRecoveryService.clearRecoveryState();
+            this.logger.debug('Crash recovery state cleared');
             
             // Stop timers and monitoring before cleanup
             this.stopTimer();
             this.stopStateSaving();
             this.stopAudioLevelMonitoring();
+            this.logger.debug('Timers and monitoring stopped');
             
             // Final cleanup
             this.cleanup();
+            this.logger.debug('Cleanup completed');
             
+            const totalStopTime = Date.now() - stopStartTime;
+            this.logger.info('Recording stopped successfully', { 
+              method: 'stopRecording',
+              sessionName: this.currentSessionName,
+              sessionId: this.currentSessionId,
+              finalDuration: this.currentDuration,
+              stopTimeMs: totalStopTime,
+              fileSize: finalBlob.size
+            });
+
             resolve(metadata);
           } catch (error) {
-            console.error('Error in stopRecording callback:', error);
+            const totalStopTime = Date.now() - stopStartTime;
+            this.logger.error('Error in stopRecording callback', error, { 
+              method: 'stopRecording',
+              sessionId: this.currentSessionId,
+              stopTimeMs: totalStopTime
+            });
             this.cleanup();
             reject(error instanceof Error ? error : new Error(String(error)));
           }
         });
       } catch (error) {
-        console.error('Error initiating recording stop:', error);
+        const totalStopTime = Date.now() - stopStartTime;
+        this.logger.error('Error initiating recording stop', error, { 
+          method: 'stopRecording',
+          sessionId: this.currentSessionId,
+          stopTimeMs: totalStopTime
+        });
         this.cleanup();
         reject(error instanceof Error ? error : new Error(String(error)));
       }
@@ -572,29 +808,65 @@ export class AudioService {
   }
 
   private cleanup(): void {
+    this.logger.debug('Starting cleanup process', { method: 'cleanup' });
+    
     try {
-      if (this.recorder) {
-        this.recorder.destroy();
-        this.recorder = null;
-      }
-      if (this.mediaStream) {
-        this.mediaStream.getTracks().forEach(track => track.stop());
-        this.mediaStream = null;
-      }
+      // Stop timers and monitoring first to prevent further operations
       this.stopAudioLevelMonitoring();
       this.stopTimer();
       this.stopStateSaving();
+      this.logger.debug('Timers and monitoring stopped');
+
+      // Destroy recorder safely
+      if (this.recorder) {
+        try {
+          this.recorder.destroy();
+          this.logger.debug('Recorder destroyed successfully');
+        } catch (recorderError) {
+          this.logger.error('Error destroying recorder', recorderError, { method: 'cleanup' });
+        }
+        this.recorder = null;
+      }
+
+      // Stop media stream tracks
+      if (this.mediaStream) {
+        try {
+          this.mediaStream.getTracks().forEach(track => {
+            track.stop();
+            this.logger.debug('Stopped media track', { trackId: track.id, kind: track.kind });
+          });
+        } catch (streamError) {
+          this.logger.error('Error stopping media stream tracks', streamError, { method: 'cleanup' });
+        }
+        this.mediaStream = null;
+      }
+
+      // Close audio context
+      if (this.audioContext && this.audioContext.state !== 'closed') {
+        try {
+          this.audioContext.close();
+          this.logger.debug('Audio context closed');
+        } catch (contextError) {
+          this.logger.error('Error closing audio context', contextError, { method: 'cleanup' });
+        }
+        this.audioContext = null;
+      }
+
+      // Reset all state
       this._isRecording = false;
       this._isPaused = false;
       this.recordingStartTime = null;
       this.currentDuration = 0;
       this.currentSessionId = null;
       this.currentFileReference = null;
-      // Clear audio chunks to prevent memory leaks
       this.audioChunks = [];
       this.lastSplitTime = 0;
+      this.analyser = null;
+      
+      this.logger.debug('Cleanup completed successfully');
+      
     } catch (error) {
-      console.error('Error during cleanup:', error);
+      this.logger.error('Error during cleanup', error, { method: 'cleanup' });
       // Reset critical state even if cleanup fails
       this._isRecording = false;
       this._isPaused = false;

@@ -1,5 +1,6 @@
 import { FileSystemService } from './FileSystemService';
 import { Session, ExportOptions } from '../types/Session';
+import { createServiceLogger } from '../utils/logger';
 
 class SessionService {
   private static instance: SessionService;
@@ -8,10 +9,15 @@ class SessionService {
   private readonly DB_VERSION = 1;
   private db: IDBDatabase | null = null;
   private initializationPromise: Promise<void> | null = null;
+  private logger = createServiceLogger('SessionService');
 
   private constructor() {
     this.fileSystemService = FileSystemService.getInstance();
     this.initializationPromise = this.initializeDB();
+    this.logger.info('SessionService initialized', {
+      dbName: this.DB_NAME,
+      dbVersion: this.DB_VERSION
+    });
   }
 
   public static getInstance(): SessionService {
@@ -22,19 +28,47 @@ class SessionService {
   }
 
   private async initializeDB(): Promise<void> {
+    this.logger.debug('Initializing IndexedDB database', { method: 'initializeDB' });
+    
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(this.DB_NAME, this.DB_VERSION);
 
-      request.onerror = () => reject(request.error);
+      request.onerror = () => {
+        const error = request.error;
+        this.logger.error('Failed to open IndexedDB database', error, { 
+          method: 'initializeDB',
+          dbName: this.DB_NAME,
+          dbVersion: this.DB_VERSION
+        });
+        reject(error);
+      };
+
       request.onsuccess = () => {
         this.db = request.result;
+        this.logger.info('IndexedDB database opened successfully', {
+          method: 'initializeDB',
+          dbName: this.DB_NAME,
+          dbVersion: this.DB_VERSION
+        });
         resolve();
       };
 
       request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result;
-        if (!db.objectStoreNames.contains('sessions')) {
-          db.createObjectStore('sessions', { keyPath: 'id' });
+        try {
+          const db = (event.target as IDBOpenDBRequest).result;
+          this.logger.info('Database upgrade needed', {
+            method: 'initializeDB',
+            oldVersion: event.oldVersion,
+            newVersion: event.newVersion
+          });
+
+          if (!db.objectStoreNames.contains('sessions')) {
+            const store = db.createObjectStore('sessions', { keyPath: 'id' });
+            this.logger.debug('Created sessions object store');
+          }
+        } catch (error) {
+          this.logger.error('Error during database upgrade', error, { method: 'initializeDB' });
+          reject(error);
         }
       };
     });

@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, lazy, Suspense } from 'react';
 import { AudioService, RecordingOptions } from '../../services/AudioService';
 import { formatTime } from '../../utils/timeUtils';
 import Validator from '../../utils/validation';
+import { createComponentLogger } from '../../utils/logger';
 
 // Lazy load the RecoveryDialog
 const RecoveryDialog = lazy(() => import('../dialogs/RecoveryDialog'));
@@ -12,6 +13,7 @@ interface RecordingViewProps {
 }
 
 const RecordingView: React.FC<RecordingViewProps> = ({ onRecordingComplete, settings }) => {
+  const logger = createComponentLogger('RecordingView');
   const [sessionName, setSessionName] = useState('');
   const [duration, setDuration] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
@@ -187,6 +189,13 @@ const RecordingView: React.FC<RecordingViewProps> = ({ onRecordingComplete, sett
   }, [audioLevel, isRecording, isPaused]);
 
   const startRecording = async () => {
+    const startTime = Date.now();
+    logger.info('User initiated recording start', { 
+      method: 'startRecording',
+      sessionName,
+      settings
+    });
+
     try {
       setIsLoading(true);
       setError(null);
@@ -194,19 +203,43 @@ const RecordingView: React.FC<RecordingViewProps> = ({ onRecordingComplete, sett
       // Validate session name
       const validation = Validator.validateSessionName(sessionName);
       if (!validation.isValid) {
+        logger.warn('Session name validation failed', { 
+          method: 'startRecording',
+          sessionName,
+          errors: validation.errors 
+        });
         setError(validation.errors.join(', '));
         return;
       }
       
       // Sanitize session name
       const sanitizedName = Validator.sanitizeFileName(sessionName) || 'Untitled Session';
+      logger.debug('Session name sanitized', { 
+        original: sessionName,
+        sanitized: sanitizedName 
+      });
       
       await audioServiceRef.current?.startRecording(sanitizedName);
       setIsRecording(true);
       setIsPaused(false);
       setDuration(0);
+
+      const totalTime = Date.now() - startTime;
+      logger.info('Recording started successfully', { 
+        method: 'startRecording',
+        sessionName: sanitizedName,
+        startupTimeMs: totalTime 
+      });
+
     } catch (error) {
-      console.error('Error starting recording:', error);
+      const totalTime = Date.now() - startTime;
+      logger.error('Failed to start recording', error, { 
+        method: 'startRecording',
+        sessionName,
+        startupTimeMs: totalTime,
+        settings
+      });
+
       setIsRecording(false);
       setError(
         error instanceof Error 
@@ -219,67 +252,144 @@ const RecordingView: React.FC<RecordingViewProps> = ({ onRecordingComplete, sett
   };
 
   const pauseRecording = () => {
+    logger.info('User initiated recording pause', { 
+      method: 'pauseRecording',
+      currentDuration: duration
+    });
+
     try {
       audioServiceRef.current?.pauseRecording();
       setIsPaused(true);
+      logger.debug('Recording paused successfully');
     } catch (error) {
-      console.error('Error pausing recording:', error);
+      logger.error('Failed to pause recording', error, { method: 'pauseRecording' });
       setError('Failed to pause recording');
     }
   };
 
   const resumeRecording = () => {
+    logger.info('User initiated recording resume', { 
+      method: 'resumeRecording',
+      currentDuration: duration
+    });
+
     try {
       setError(null);
       audioServiceRef.current?.resumeRecording();
       setIsPaused(false);
+      logger.debug('Recording resumed successfully');
     } catch (error) {
-      console.error('Error resuming recording:', error);
+      logger.error('Failed to resume recording', error, { method: 'resumeRecording' });
       setError('Failed to resume recording');
     }
   };
 
   const stopRecording = async () => {
+    const stopTime = Date.now();
+    logger.info('User initiated recording stop', { 
+      method: 'stopRecording',
+      finalDuration: duration,
+      sessionName
+    });
+
     try {
       setIsLoading(true);
       setError(null);
-      const metadata = await audioServiceRef.current?.stopRecording();
+      
+      let metadata;
+      try {
+        metadata = await audioServiceRef.current?.stopRecording();
+      } catch (stopError) {
+        logger.warn('Regular stop failed, attempting force stop', stopError, { method: 'stopRecording' });
+        
+        // Try force stop if regular stop fails
+        metadata = await audioServiceRef.current?.forceStop();
+        
+        if (!metadata) {
+          logger.warn('Force stop returned null metadata, creating fallback metadata');
+          metadata = {
+            sessionName: sessionName || 'Emergency Stop',
+            startTime: new Date(Date.now() - duration * 1000),
+            duration: duration,
+            fileSize: 0,
+            format: 'unknown',
+            quality: 0
+          };
+        }
+      }
+
       onRecordingComplete(metadata);
+      
       setIsRecording(false);
       setIsPaused(false);
       setDuration(0);
       setSessionName('');
       setAudioLevel(0);
+
+      const totalTime = Date.now() - stopTime;
+      logger.info('Recording stopped successfully', { 
+        method: 'stopRecording',
+        metadata,
+        stopTimeMs: totalTime
+      });
+
     } catch (error) {
-      console.error('Error stopping recording:', error);
-      setError('Failed to stop recording');
+      const totalTime = Date.now() - stopTime;
+      logger.error('Failed to stop recording even with force stop', error, { 
+        method: 'stopRecording',
+        duration,
+        sessionName,
+        stopTimeMs: totalTime
+      });
+      
+      // Emergency UI reset if everything fails
+      setIsRecording(false);
+      setIsPaused(false);
+      setDuration(0);
+      setSessionName('');
+      setAudioLevel(0);
+      
+      setError('Recording was forcibly stopped due to an error');
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleRecover = async () => {
+    logger.info('User chose to recover interrupted recording', { 
+      method: 'handleRecover',
+      recoveryState 
+    });
+
     try {
-      console.log('Attempting to recover recording');
       if (recoveryState) {
         await audioServiceRef.current?.startRecording(recoveryState.sessionName);
         setShowRecoveryDialog(false);
         setRecoveryState(null);
+        logger.info('Recording recovery completed successfully');
       }
     } catch (error) {
-      console.error('Error recovering recording:', error);
+      logger.error('Failed to recover recording', error, { 
+        method: 'handleRecover',
+        recoveryState 
+      });
       setError('Failed to recover recording');
     }
   };
 
   const handleDiscard = async () => {
+    logger.info('User chose to discard recovery state', { 
+      method: 'handleDiscard',
+      recoveryState 
+    });
+
     try {
-      console.log('Discarding recovery state');
       await audioServiceRef.current?.clearRecoveryState();
       setShowRecoveryDialog(false);
       setRecoveryState(null);
+      logger.info('Recovery state discarded successfully');
     } catch (error) {
-      console.error('Error discarding recovery state:', error);
+      logger.error('Failed to discard recovery state', error, { method: 'handleDiscard' });
       setError('Failed to discard recovery state');
     }
   };
